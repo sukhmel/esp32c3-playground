@@ -1,0 +1,40 @@
+[package]
+name = "esp32c3-playground"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+ariel-os = { path = "build/imports/ariel-os/src/ariel-os", features = ["time", "wifi-esp", "net", "ipv4", "dns", "tcp"], default-features = false }
+ariel-os-hal = { path = "build/imports/ariel-os/src/ariel-os-hal" }
+esp-hal = { version = "1", features = ["esp32c3", "unstable"] }
+esp-hal-smartled = { version = "0.17", features = ["esp32c3"] }
+smart-leds = "0.4"
+mipidsi = "0.10"
+display-interface-spi = "0.5"
+display-interface = "0.5"
+sky-ili9341 = { version = "0.1", features = ["async", "graphics"], optional = true }
+embedded-graphics = "0.8"
+embedded-hal-bus = { version = "0.3" }
+embedded-hal-async = { version = "1", optional = true }
+esp-hal-buzzer = "0.3"
+libm = "0.2"
+embassy-sync = { version = "0.8" }
+embassy-futures = "0.1"
+heapless = "0.9.3"
+num_enum = { version = "0.7.6", default-features = false }
+log = "0.4.30"
+
+[patch.crates-io]
+esp-hal-smartled = { path = "patches/esp-hal-smartled" }
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = [
+  'cfg(context, values(any()))',
+] }
+
+[features]
+async_ili9341 = ["sky-ili9341", "embedded-hal-bus/async", "embedded-hal-async"]
+
+[build-dependencies]
+toml = "1"
+embedded-graphics = "0.8"
