@@ -1,11 +1,17 @@
 use crate::inter_task::SoundReceiver;
-use ariel_os::debug::log::warn;
+use ariel_os::debug::log::{warn};
 use ariel_os::time::Timer;
 use core::fmt::Display;
+use core::iter;
 use embassy_futures::select::{Either, select};
+use esp_hal::Blocking;
 use esp_hal::gpio::OutputPin;
 use esp_hal::ledc::{LSGlobalClkSource, Ledc, channel, timer};
+use esp_hal::rmt::{ChannelCreator, PulseCode, Rmt};
 use esp_hal_buzzer::{Buzzer, Error, ToneValue, notes::*, song};
+use esp_hal_smartled::{smart_led_buffer, LedAdapterError, SmartLedsAdapter};
+use smart_leds::{SmartLedsWrite, RGB8};
+use crate::rainbow::RAINBOW_RGB_U8_32;
 
 #[derive(num_enum::TryFromPrimitive, Debug)]
 #[repr(u8)]
@@ -26,19 +32,74 @@ pub enum Melody {
     ZeldaTheme = 13,
 }
 
+macro_rules! write_led {
+    ($led: ident, $frequency: expr) => {
+        if let Some(ref mut led) = $led {
+            let (r, g, b) = if $frequency <= 30 {
+                (0, 0, 0)
+            } else {
+                RAINBOW_RGB_U8_32[((libm::log2(($frequency - 30) as f64) * 8.0) as usize % 32)]
+            };
+            if let Err(e) = led.write(iter::once(RGB8 { r: r / 4, g: g / 4, b: b / 4 })) {
+                match e {
+                    LedAdapterError::BufferSizeExceeded => {
+                        warn!("LED buffer size exceeded");
+                    }
+                    LedAdapterError::TransmissionError(e) => {
+                        warn!("LED transmission error: {:?}", e);
+                    }
+                }
+            }
+        }
+    };
+}
+
 impl Display for Melody {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         write!(f, "{:?}", self)
     }
 }
 
+pub struct SoundLed<'a, T: OutputPin, U: OutputPin> {
+    rmt_channel: ChannelCreator<'a, Blocking, 0>,
+    rmt_buffer: [PulseCode; 25],
+    buzzer_pin: U,
+    led_pin: T,
+    ledc: Ledc<'a>,
+}
+
+impl<'a, T: OutputPin, U: OutputPin> SoundLed<'a, T, U> {
+    pub fn new(buzzer_pin: U, mut ledc: Ledc<'a>, led_pin: T, rmt: Rmt<'a, Blocking>) -> Self {
+        ledc.set_global_slow_clock(LSGlobalClkSource::APBClk);
+        let rmt_channel = rmt.channel0;
+        let rmt_buffer = smart_led_buffer!(1);
+
+        Self { rmt_channel, rmt_buffer, led_pin, ledc, buzzer_pin }
+    }
+
+    pub async fn control(mut self,  channel: SoundReceiver) {
+        let mut melody = None;
+        let mut led = SmartLedsAdapter::new(self.rmt_channel, self.led_pin, &mut self.rmt_buffer);
+        let mut buzzer = Buzzer::new(&self.ledc, timer::Number::Timer0, channel::Number::Channel1, self.buzzer_pin);
+
+        loop {
+            match select(play(&mut buzzer, melody.take(), Some(&mut led)), channel.receive()).await {
+                Either::First(_) => {}
+                Either::Second(message) => {
+                    melody = message;
+                }
+            }
+        }
+    }
+}
+
 pub async fn buzz(pin: impl OutputPin, mut ledc: Ledc<'static>, channel: SoundReceiver) {
     ledc.set_global_slow_clock(LSGlobalClkSource::APBClk);
     let mut buzzer = Buzzer::new(&ledc, timer::Number::Timer0, channel::Number::Channel1, pin);
-
+    buzzer.set_volume(2).unwrap();
     let mut melody = None;
     loop {
-        match select(play(&mut buzzer, melody.take()), channel.receive()).await {
+        match select(play(&mut buzzer, melody.take(), None), channel.receive()).await {
             Either::First(_) => {}
             Either::Second(message) => {
                 melody = message;
@@ -47,9 +108,10 @@ pub async fn buzz(pin: impl OutputPin, mut ledc: Ledc<'static>, channel: SoundRe
     }
 }
 
-async fn play(buzzer: &mut Buzzer<'_>, melody: Option<Melody>) {
+async fn play(buzzer: &mut Buzzer<'_>, melody: Option<Melody>, mut led: Option<&mut SmartLedsAdapter<'_, 25>>) {
     let Some(melody) = melody else {
         buzzer.mute();
+        write_led!(led, 0);
         Timer::after_ticks(u64::MAX / 2).await;
         return;
     };
@@ -72,6 +134,7 @@ async fn play(buzzer: &mut Buzzer<'_>, melody: Option<Melody>) {
     };
 
     for tone in song {
+        write_led!(led, tone.frequency);
         if let Err(e) = buzzer.play(tone.frequency) {
             match e {
                 Error::Channel(e) => warn!("Channel error: {:?}", e),
@@ -85,8 +148,11 @@ async fn play(buzzer: &mut Buzzer<'_>, melody: Option<Melody>) {
         }
         Timer::after_millis(tone.duration as u64).await;
         buzzer.mute();
+        write_led!(led, 0);
+        Timer::after_millis(1).await;
     }
 }
+
 
 /// Credit: Songs have been adapted from https://github.com/robsoncouto/arduino-songs
 pub const DOOM: [ToneValue; 680] = song!(

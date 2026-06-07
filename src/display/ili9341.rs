@@ -1,4 +1,5 @@
 use crate::inter_task::{MESSAGE_SIZE, MessageReceiver};
+use crate::rainbow::{rgb565_rainbow, RAINBOW_RGB565_128, RAINBOW_RGB565_256};
 use ariel_os::debug::log::{info, warn};
 use ariel_os::time::{Instant, Timer};
 use ariel_os_hal::gpio::Output;
@@ -12,6 +13,7 @@ use embedded_graphics::{
     prelude::*,
     text::Text,
 };
+use embedded_graphics::pixelcolor::Rgb565;
 use embedded_hal_bus::spi::ExclusiveDevice;
 use esp_hal::Blocking;
 use esp_hal::delay::Delay;
@@ -19,8 +21,6 @@ use esp_hal::spi::master::Spi;
 use mipidsi::interface::SpiInterface;
 use mipidsi::options::{ColorOrder, Rotation};
 use mipidsi::{Builder, Display as DisplayImpl, models::ILI9341Rgb565, options::Orientation};
-
-include!(concat!(env!("OUT_DIR"), "/rainbows.rs"));
 
 fn rainbow_at(length: usize, step: usize) -> Rgb565 {
     let step = step % length;
@@ -121,9 +121,7 @@ async fn rainbow_text(
                 info!("Failed to write char: {}", ch);
                 continue;
             };
-            let mut next_point = Text::new(&char, point, text_style)
-                .draw(display)
-                .unwrap();
+            let mut next_point = Text::new(&char, point, text_style).draw(display).unwrap();
             char.clear();
             let continued = if next_point.x > 310 {
                 next_point = Text::new("\n", next_point, text_style)
@@ -164,9 +162,7 @@ pub async fn test_display(display: &mut DisplayAlias<'_, '_>) {
         let Ok(_) = core::fmt::write(&mut char, format_args!("{}", ch)) else {
             continue;
         };
-        point = Text::new(&char, point, text_style)
-            .draw(display)
-            .unwrap();
+        point = Text::new(&char, point, text_style).draw(display).unwrap();
         char.clear();
         Timer::after_millis(20).await;
     }
@@ -209,9 +205,7 @@ pub async fn test_display(display: &mut DisplayAlias<'_, '_>) {
             let Ok(_) = core::fmt::write(&mut char, format_args!("{}", ch)) else {
                 continue;
             };
-            point = Text::new(&char, point, text_style)
-                .draw(display)
-                .unwrap();
+            point = Text::new(&char, point, text_style).draw(display).unwrap();
         }
         char.clear();
         Timer::after_millis(50).await;

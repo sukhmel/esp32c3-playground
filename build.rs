@@ -51,7 +51,7 @@ fn generate_rainbow_arrays(out_dir: &str) {
 
     for &length in &[128, 256] {
         let mut content =
-            format!("#[allow(dead_code)]\nstatic RAINBOW_RGB565_{length}: [u16; {length}] = [");
+            format!("#[allow(dead_code)]\npub static RAINBOW_RGB565_{length}: [u16; {length}] = [");
 
         for step in 0..length {
             let r = (f64::sin(2.0 * step as f64 * PI / length as f64) * 15.0 + 16.0) as u8;
@@ -72,7 +72,7 @@ fn generate_rainbow_arrays(out_dir: &str) {
 
     for &length in &[128, 256] {
         let mut content =
-            format!("#[allow(dead_code)]\nstatic RAINBOW_RGB666_{length}: [u32; {length}] = [");
+            format!("#[allow(dead_code)]\npub static RAINBOW_RGB666_{length}: [u32; {length}] = [");
 
         for step in 0..length {
             let r = (f64::sin(2.0 * step as f64 * PI / length as f64) * 31.0 + 32.0) as u8;
@@ -91,10 +91,30 @@ fn generate_rainbow_arrays(out_dir: &str) {
         all_content.push_str(&content);
     }
 
+    for &length in &[32, 64] {
+        let mut content =
+            format!("#[allow(dead_code)]\npub static RAINBOW_RGB_U8_{length}: [(u8, u8, u8); {length}] = [");
+
+        for step in 0..length {
+            let r = (f64::sin(2.0 * step as f64 * PI / length as f64) * 127.0 + 128.0) as u8;
+            let g =
+                (f64::sin(2.0 * step as f64 * PI / length as f64 + PI / 3.0) * 127.0 + 128.0) as u8;
+            let b = (f64::sin(2.0 * step as f64 * PI / length as f64 + PI * 2.0 / 3.0) * 127.0
+                + 128.0) as u8;
+
+            if step % 5 == 0 {
+                content.push_str("\n\t");
+            }
+            content.push_str(&format!("({r}, {g}, {b}), "));
+        }
+        content.push_str("\n];\n");
+        all_content.push_str(&content);
+    }
+
     all_content.push_str(
         r#"
 #[allow(dead_code)]
-fn rgb565_rainbow(step: usize, length: usize) -> Rgb565 {
+pub fn rgb565_rainbow(step: usize, length: usize) -> Rgb565 {
     let step = step % length;
     let fraction = step as f64 / length as f64;
 
@@ -106,7 +126,7 @@ fn rgb565_rainbow(step: usize, length: usize) -> Rgb565 {
 }
 
 #[allow(dead_code)]
-fn rgb666_rainbow(step: usize, length: usize) -> Rgb666 {
+pub fn rgb666_rainbow(step: usize, length: usize) -> Rgb666 {
     let step = step % length;
     let fraction = step as f64 / length as f64;
 
@@ -115,6 +135,18 @@ fn rgb666_rainbow(step: usize, length: usize) -> Rgb666 {
     let b = (libm::sin(2.0 * PI * fraction + PI * 2.0 / 3.0) * 31.0 + 32.0) as u8;
 
     Rgb666::new(r, g, b)
+}
+
+#[allow(dead_code)]
+pub fn rgb_u8_rainbow(step: usize, length: usize) -> (u8, u8, u8) {
+    let step = step % length;
+    let fraction = step as f64 / length as f64;
+
+    let r = (libm::sin(2.0 * PI * fraction) * 127.0 + 128.0) as u8;
+    let g = (libm::sin(2.0 * PI * fraction + PI / 3.0) * 127.0 + 128.0) as u8;
+    let b = (libm::sin(2.0 * PI * fraction + PI * 2.0 / 3.0) * 127.0 + 128.0) as u8;
+
+    (r, g, b)
 }
 "#,
     );

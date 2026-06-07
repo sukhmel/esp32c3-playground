@@ -1,5 +1,6 @@
 use ariel_os_hal::hal::peripherals;
 ariel_os::hal::define_peripherals!(Peripherals {
+    uart: UART0,
     ledc: LEDC,
     rmt: RMT,
     spi: SPI2,
@@ -11,11 +12,14 @@ ariel_os::hal::define_peripherals!(Peripherals {
     pin5: GPIO5,
     pin6: GPIO6,
     pin7: GPIO7,
+    /// Needs to be disconnected from ground on boot
     pin8: GPIO8,
-    pin9: GPIO9, // needs to be disconnected from ground on boot
+    /// Needs to be disconnected from ground on boot
+    pin9: GPIO9,
     pin10: GPIO10,
     pin18: GPIO18,
     pin19: GPIO19,
     pin20: GPIO20,
+    /// Will break debug log if connected to output
     pin21: GPIO21,
 });

@@ -4,7 +4,7 @@ extern crate alloc;
 
 include!(concat!(env!("OUT_DIR"), "/secrets.rs"));
 
-use crate::buzzer::Melody;
+use crate::buzzer::{Melody, SoundLed};
 use crate::inter_task::{MESSAGE_CHANNEL, MESSAGE_SIZE, SOUND_CHANNEL};
 use crate::pins::Peripherals;
 use ariel_os::asynch::Spawner;
@@ -19,6 +19,7 @@ use display::ili9341_async::Display;
 use embassy_futures::join::join;
 use esp_hal::gpio::OutputPin;
 use esp_hal::ledc::Ledc;
+use esp_hal::rmt::Rmt;
 use esp_hal::spi::master::{Config, Spi};
 use esp_hal::time::Rate;
 
@@ -27,6 +28,9 @@ mod display;
 pub mod inter_task;
 mod led;
 pub mod pins;
+pub mod rainbow {
+    include!(concat!(env!("OUT_DIR"), "/rainbows.rs"));
+}
 
 #[panic_handler]
 fn panic(info: &core::panic::PanicInfo) -> ! {
@@ -42,12 +46,12 @@ async fn ui(peripherals: Peripherals) {
         Config::default().with_frequency(Rate::from_mhz(40)),
     )
     .unwrap()
-    .with_miso(peripherals.pin2)
+    .with_miso(peripherals.pin20)
     .with_mosi(peripherals.pin7)
     .with_sck(peripherals.pin6);
     let cs_pin = Output::new(peripherals.pin10, Level::Low);
-    let dc_pin = Output::new(peripherals.pin0, Level::Low);
-    let rst_pin = Output::new(peripherals.pin1, Level::Low);
+    let dc_pin = Output::new(peripherals.pin9, Level::Low);
+    let rst_pin = Output::new(peripherals.pin18, Level::Low);
     #[cfg(not(feature = "async_ili9341"))]
     let mut buffer = [0u8; 512];
     #[cfg(not(feature = "async_ili9341"))]
@@ -55,15 +59,18 @@ async fn ui(peripherals: Peripherals) {
     #[cfg(feature = "async_ili9341")]
     let mut display = Display::new(raw_spi.into_async(), cs_pin, dc_pin, rst_pin).await;
     let ledc = Ledc::new(peripherals.ledc);
+    let rmt = Rmt::new(peripherals.rmt, Rate::from_mhz(80)).unwrap();
+    let buzzer = SoundLed::new(peripherals.pin19, ledc, peripherals.pin8, rmt);
     join(
         display.control_display(MESSAGE_CHANNEL.receiver()),
-        blast_sound(peripherals.pin4, ledc),
+        buzzer.control(SOUND_CHANNEL.receiver()),
     )
     .await;
     info!("Finished UI");
 }
 
-async fn blast_sound(speaker: impl OutputPin, ledc: Ledc<'static>) {
+#[allow(dead_code)]
+async fn blast_sound<'a>(speaker: impl OutputPin, ledc: Ledc<'static>) {
     buzzer::buzz(speaker, ledc, SOUND_CHANNEL.receiver()).await;
 }
 
@@ -129,7 +136,9 @@ async fn run_echo_server(stack: Stack<'static>) -> ! {
 
         loop {
             match socket.read(&mut echo_buffer).await {
-                Ok(0) => { break; } // Client closed connection
+                Ok(0) => {
+                    break;
+                } // Client closed connection
                 Ok(n) => {
                     let mut channel_msg = heapless::String::<MESSAGE_SIZE>::new();
                     if let Ok(utf8_str) = core::str::from_utf8(&echo_buffer[..n.min(MESSAGE_SIZE)])
@@ -150,7 +159,9 @@ async fn run_echo_server(stack: Stack<'static>) -> ! {
                             let Ok(name) = Melody::try_from(i) else {
                                 break;
                             };
-                            if core::fmt::write(&mut list, format_args!("{:2} = {}\r\n", i, name)).is_ok() {
+                            if core::fmt::write(&mut list, format_args!("{:2} = {}\r\n", i, name))
+                                .is_ok()
+                            {
                                 let _ = channel_msg.push_str(&list);
                                 let _ = socket.write(list.as_bytes()).await;
                                 list.clear();
@@ -168,7 +179,12 @@ async fn run_echo_server(stack: Stack<'static>) -> ! {
                             let melody = Melody::try_from(command);
                             if let Ok(melody) = melody {
                                 let mut name = heapless::String::<32>::new();
-                                if core::fmt::write(&mut name, format_args!("Playing {}\r\n", melody)).is_ok() {
+                                if core::fmt::write(
+                                    &mut name,
+                                    format_args!("Playing {}\r\n", melody),
+                                )
+                                .is_ok()
+                                {
                                     let _ = channel_msg.push_str(&name);
                                     let _ = socket.write(name.as_bytes()).await;
                                 }

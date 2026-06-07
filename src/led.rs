@@ -3,17 +3,17 @@ use ariel_os::debug::log::info;
 use ariel_os::time::Timer;
 use ariel_os_hal::gpio::{Level, Output};
 use core::iter;
+use ariel_os_hal::hal::gpio::output::OutputPin;
+use esp_hal::Blocking;
 use esp_hal::rmt::Rmt;
-use esp_hal::time::Rate;
 use esp_hal_smartled::{SmartLedsAdapter, smart_led_buffer};
 use smart_leds::{RGB8, SmartLedsWrite};
 
 #[allow(dead_code)]
-async fn cycle_rgb_led(peripherals: Peripherals) {
-    let rmt = Rmt::new(peripherals.rmt, Rate::from_mhz(80)).unwrap();
+pub async fn cycle_rgb_led<T: OutputPin>(rmt: Rmt<'_, Blocking>, pin: T) {
     let rmt_channel = rmt.channel0;
     let mut rmt_buffer = smart_led_buffer!(1);
-    let mut led_strip = SmartLedsAdapter::new(rmt_channel, peripherals.pin8, &mut rmt_buffer);
+    let mut led_strip = SmartLedsAdapter::new(rmt_channel, pin, &mut rmt_buffer);
     for index in 0..=16 {
         let a = index % 4;
         let b = (index >> 2) % 4;

@@ -3,8 +3,9 @@ extern crate alloc;
 use alloc::vec;
 use alloc::vec::Vec;
 
+use crate::inter_task::MessageReceiver;
 use ariel_os::time::Timer;
-use ariel_os_hal::gpio::{Output};
+use ariel_os_hal::gpio::Output;
 use embedded_graphics::Drawable;
 use embedded_graphics::geometry::Point;
 use embedded_graphics::mono_font::MonoTextStyle;
@@ -18,7 +19,6 @@ use esp_hal::delay::Delay;
 use esp_hal::spi::master::{Config, Spi};
 use esp_hal::time::Rate;
 use sky_ili9341::{AsyncBuilder, AsyncDisplay, AsyncSpiInterface, Orientation};
-use crate::inter_task::MessageReceiver;
 
 type Ili9341Display<'d> =
     AsyncDisplay<AsyncSpiInterface<ExclusiveDevice<Spi<'d, Async>, Output, DelayAsync>, Output>>;
@@ -44,7 +44,12 @@ pub struct Display<'d> {
 }
 
 impl<'d> Display<'d> {
-    pub(crate) async fn new(raw_spi: Spi<'d, Async>, cs_pin: Output, dc_pin: Output, mut rst_pin: Output) -> Self {
+    pub(crate) async fn new(
+        raw_spi: Spi<'d, Async>,
+        cs_pin: Output,
+        dc_pin: Output,
+        mut rst_pin: Output,
+    ) -> Self {
         let spi = ExclusiveDevice::new(raw_spi, cs_pin, DelayAsync {}).unwrap();
         let di = AsyncSpiInterface::new(spi, dc_pin);
         let mut delay = Delay::new();
@@ -53,9 +58,7 @@ impl<'d> Display<'d> {
             .init(&mut rst_pin, &mut delay)
             .await
             .expect("Display initialization failed");
-        Self {
-            display
-        }
+        Self { display }
     }
 
     pub async fn control_display(&mut self, _channel: MessageReceiver) {
@@ -72,9 +75,13 @@ impl<'d> Display<'d> {
 
         let text_style = MonoTextStyle::new(&FONT_10X20, Rgb565::GREEN);
 
-        Text::new("Ariel OS + ESP32-C3 + ILI9341\nasync display driver", Point::new(20, 40), text_style)
-            .draw(&mut canvas)
-            .unwrap();
+        Text::new(
+            "Ariel OS + ESP32-C3 + ILI9341\nasync display driver",
+            Point::new(20, 40),
+            text_style,
+        )
+        .draw(&mut canvas)
+        .unwrap();
 
         self.display
             .write_pixels(0, 0, WIDTH as u16, HEIGHT as u16, frame_buffer)

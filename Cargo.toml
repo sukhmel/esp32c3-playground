@@ -22,7 +22,6 @@ embassy-sync = { version = "0.8" }
 embassy-futures = "0.1"
 heapless = "0.9.3"
 num_enum = { version = "0.7.6", default-features = false }
-log = "0.4.30"
 
 [patch.crates-io]
 esp-hal-smartled = { path = "patches/esp-hal-smartled" }
