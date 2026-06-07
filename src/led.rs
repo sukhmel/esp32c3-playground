@@ -1,9 +1,9 @@
-use crate::pins::Peripherals;
+use crate::pins::BinaryPeripherals;
 use ariel_os::debug::log::info;
 use ariel_os::time::Timer;
 use ariel_os_hal::gpio::{Level, Output};
-use core::iter;
 use ariel_os_hal::hal::gpio::output::OutputPin;
+use core::iter;
 use esp_hal::Blocking;
 use esp_hal::rmt::Rmt;
 use esp_hal_smartled::{SmartLedsAdapter, smart_led_buffer};
@@ -41,13 +41,13 @@ pub async fn cycle_rgb_led<T: OutputPin>(rmt: Rmt<'_, Blocking>, pin: T) {
 }
 
 #[allow(dead_code)]
-async fn led_counter(peripherals: Peripherals) {
-    let mut led0 = Output::new(peripherals.pin0, Level::Low);
-    let mut led1 = Output::new(peripherals.pin1, Level::Low);
-    let mut led2 = Output::new(peripherals.pin2, Level::Low);
-    let mut led3 = Output::new(peripherals.pin3, Level::Low);
-    let mut led4 = Output::new(peripherals.pin4, Level::Low);
-    let mut led5 = Output::new(peripherals.pin5, Level::Low);
+async fn led_counter(peripherals: BinaryPeripherals) {
+    let mut led0 = Output::new(peripherals.pin8, Level::Low);
+    let mut led1 = Output::new(peripherals.pin9, Level::Low);
+    let mut led2 = Output::new(peripherals.pin18, Level::Low);
+    let mut led3 = Output::new(peripherals.pin19, Level::Low);
+    let mut led4 = Output::new(peripherals.pin20, Level::Low);
+    let mut led5 = Output::new(peripherals.pin21, Level::Low);
     let mut led6 = Output::new(peripherals.pin6, Level::Low);
     let mut led7 = Output::new(peripherals.pin7, Level::Low);
     let mut led8 = Output::new(peripherals.pin10, Level::Low);

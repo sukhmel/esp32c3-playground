@@ -5,7 +5,7 @@ extern crate alloc;
 include!(concat!(env!("OUT_DIR"), "/secrets.rs"));
 
 use crate::buzzer::{Melody, SoundLed};
-use crate::inter_task::{MESSAGE_CHANNEL, MESSAGE_SIZE, SOUND_CHANNEL};
+use crate::inter_task::{COORDINATES_CHANNEL, MESSAGE_CHANNEL, MESSAGE_SIZE, SOUND_CHANNEL};
 use crate::pins::Peripherals;
 use ariel_os::asynch::Spawner;
 use ariel_os::debug::log::{debug, error, info, warn};
@@ -16,7 +16,7 @@ use ariel_os_hal::gpio::{Level, Output};
 use display::ili9341::Display;
 #[cfg(feature = "async_ili9341")]
 use display::ili9341_async::Display;
-use embassy_futures::join::join;
+use embassy_futures::join::join3;
 use esp_hal::gpio::OutputPin;
 use esp_hal::ledc::Ledc;
 use esp_hal::rmt::Rmt;
@@ -25,9 +25,11 @@ use esp_hal::time::Rate;
 
 mod buzzer;
 mod display;
+mod input;
 pub mod inter_task;
 mod led;
 pub mod pins;
+
 pub mod rainbow {
     include!(concat!(env!("OUT_DIR"), "/rainbows.rs"));
 }
@@ -42,28 +44,29 @@ fn panic(info: &core::panic::PanicInfo) -> ! {
 async fn ui(peripherals: Peripherals) {
     info!("Starting UI");
     let raw_spi = Spi::new(
-        peripherals.spi,
+        peripherals.binary.spi,
         Config::default().with_frequency(Rate::from_mhz(40)),
     )
     .unwrap()
-    .with_miso(peripherals.pin20)
-    .with_mosi(peripherals.pin7)
-    .with_sck(peripherals.pin6);
-    let cs_pin = Output::new(peripherals.pin10, Level::Low);
-    let dc_pin = Output::new(peripherals.pin9, Level::Low);
-    let rst_pin = Output::new(peripherals.pin18, Level::Low);
+    .with_miso(peripherals.binary.pin20)
+    .with_mosi(peripherals.binary.pin7)
+    .with_sck(peripherals.binary.pin6);
+    let cs_pin = Output::new(peripherals.binary.pin10, Level::Low);
+    let dc_pin = Output::new(peripherals.binary.pin9, Level::Low);
+    let rst_pin = Output::new(peripherals.binary.pin18, Level::Low);
     #[cfg(not(feature = "async_ili9341"))]
     let mut buffer = [0u8; 512];
     #[cfg(not(feature = "async_ili9341"))]
     let mut display = Display::new(raw_spi, cs_pin, dc_pin, rst_pin, &mut buffer);
     #[cfg(feature = "async_ili9341")]
     let mut display = Display::new(raw_spi.into_async(), cs_pin, dc_pin, rst_pin).await;
-    let ledc = Ledc::new(peripherals.ledc);
-    let rmt = Rmt::new(peripherals.rmt, Rate::from_mhz(80)).unwrap();
-    let buzzer = SoundLed::new(peripherals.pin19, ledc, peripherals.pin8, rmt);
-    join(
-        display.control_display(MESSAGE_CHANNEL.receiver()),
+    let ledc = Ledc::new(peripherals.binary.ledc);
+    let rmt = Rmt::new(peripherals.binary.rmt, Rate::from_mhz(80)).unwrap();
+    let buzzer = SoundLed::new(peripherals.binary.pin19, ledc, peripherals.binary.pin8, rmt);
+    join3(
+        display.draw_lines(COORDINATES_CHANNEL.receiver()),
         buzzer.control(SOUND_CHANNEL.receiver()),
+        input::read_joystick(peripherals.analog),
     )
     .await;
     info!("Finished UI");

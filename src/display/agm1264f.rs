@@ -23,19 +23,19 @@ struct Agm1264fDisplay {
 impl Agm1264fDisplay {
     fn new(peripherals: Peripherals) -> Self {
         Self {
-            db0: Output::new(peripherals.pin0, Level::Low),
-            db1: Output::new(peripherals.pin1, Level::Low),
-            db2: Output::new(peripherals.pin2, Level::Low),
-            db3: Output::new(peripherals.pin3, Level::Low),
-            db4: Output::new(peripherals.pin4, Level::Low),
-            db5: Output::new(peripherals.pin5, Level::Low),
-            db6: Output::new(peripherals.pin6, Level::Low),
-            db7: Output::new(peripherals.pin7, Level::Low),
-            data: Output::new(peripherals.pin8, Level::High),
-            enable: Output::new(peripherals.pin10, Level::High),
-            cs1: Output::new(peripherals.pin18, Level::Low),
-            cs2: Output::new(peripherals.pin19, Level::Low),
-            read: Output::new(peripherals.pin9, Level::Low), // pulled down, unconnected
+            db0: Output::new(peripherals.analog.pin0, Level::Low),
+            db1: Output::new(peripherals.analog.pin1, Level::Low),
+            db2: Output::new(peripherals.analog.pin2, Level::Low),
+            db3: Output::new(peripherals.analog.pin3, Level::Low),
+            db4: Output::new(peripherals.analog.pin4, Level::Low),
+            db5: Output::new(peripherals.analog.pin5, Level::Low),
+            db6: Output::new(peripherals.binary.pin6, Level::Low),
+            db7: Output::new(peripherals.binary.pin7, Level::Low),
+            data: Output::new(peripherals.binary.pin8, Level::High),
+            enable: Output::new(peripherals.binary.pin10, Level::High),
+            cs1: Output::new(peripherals.binary.pin18, Level::Low),
+            cs2: Output::new(peripherals.binary.pin19, Level::Low),
+            read: Output::new(peripherals.binary.pin9, Level::Low), // pulled down, unconnected
         }
     }
 

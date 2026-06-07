@@ -1641,6 +1641,7 @@ dependencies = [
  "heapless 0.9.3",
  "libm",
  "mipidsi",
+ "nb 1.1.0",
  "num_enum",
  "sky-ili9341",
  "smart-leds",

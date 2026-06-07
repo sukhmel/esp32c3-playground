@@ -92,8 +92,9 @@ fn generate_rainbow_arrays(out_dir: &str) {
     }
 
     for &length in &[32, 64] {
-        let mut content =
-            format!("#[allow(dead_code)]\npub static RAINBOW_RGB_U8_{length}: [(u8, u8, u8); {length}] = [");
+        let mut content = format!(
+            "#[allow(dead_code)]\npub static RAINBOW_RGB_U8_{length}: [(u8, u8, u8); {length}] = ["
+        );
 
         for step in 0..length {
             let r = (f64::sin(2.0 * step as f64 * PI / length as f64) * 127.0 + 128.0) as u8;

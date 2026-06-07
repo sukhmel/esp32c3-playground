@@ -1,0 +1,112 @@
+use ariel_os::debug::println;
+use crate::inter_task::{COORDINATES_CHANNEL, Reading};
+use crate::pins::AnalogPeripherals;
+use ariel_os::time::{Instant, Timer};
+use esp_hal::analog::adc::{Adc, AdcConfig, Attenuation};
+
+static DEFAULT_MIN_V: u16 = 1620;
+static DEFAULT_MAX_V: u16 = 3860;
+
+// 0 1 2
+// 3 4 5
+// 6 7 8
+pub static CHARSETS: [&str; 9] = [
+    ",M._/[`]", "RTYFGHCV", "UIOJKLBN",
+    "{P}<>:'\"", "QWEADZSX", "12345678",
+    "90!@#$%^", "(&)*-+=\\", "[ ]{}|;~",
+];
+
+macro_rules! value_to_percent {
+    ($value: expr, $min: expr, $max: expr, $invert: expr) => {{
+        if $value < $min {
+            $min = $value;
+        }
+        if $value > $max {
+            $max = $value;
+        }
+        if $max == $min {
+            0.5
+        } else {
+            let pos = (($value - $min) as f32) / ($max - $min) as f32;
+            if $invert { 1.0 - pos } else { pos }
+        }
+    }};
+}
+
+pub(crate) use value_to_percent;
+
+pub async fn read_joystick(peripherals: AnalogPeripherals) {
+    let mut min_v = DEFAULT_MIN_V;
+    let mut max_v = DEFAULT_MAX_V;
+    let mut adc1_config = AdcConfig::new();
+    let mut x_0 = adc1_config.enable_pin(peripherals.pin1, Attenuation::_11dB);
+    let mut y_0 = adc1_config.enable_pin(peripherals.pin0, Attenuation::_11dB);
+    let mut x_1 = adc1_config.enable_pin(peripherals.pin3, Attenuation::_11dB);
+    let mut y_1 = adc1_config.enable_pin(peripherals.pin2, Attenuation::_11dB);
+    let mut adc1 = Adc::new(peripherals.adc1, adc1_config);
+    let mut keypress = None;
+
+    loop {
+        let start = Instant::now();
+        let x_0_value = nb::block!(adc1.read_oneshot(&mut x_0)).unwrap();
+        let y_0_value = nb::block!(adc1.read_oneshot(&mut y_0)).unwrap();
+        let x_1_value = nb::block!(adc1.read_oneshot(&mut x_1)).unwrap();
+        let y_1_value = nb::block!(adc1.read_oneshot(&mut y_1)).unwrap();
+
+        let elapsed = start.elapsed().as_micros();
+        let x_0 = value_to_percent!(x_0_value, min_v, max_v, false);
+        let y_0 = value_to_percent!(y_0_value, min_v, max_v, true);
+        let x_1 = value_to_percent!(x_1_value, min_v, max_v, false);
+        let y_1 = value_to_percent!(y_1_value, min_v, max_v, true);
+        let sel_x_0 = if x_0 < 0.3 { 0 } else if x_0 < 0.7 { 1 } else { 2 };
+        let sel_y_0 = if y_0 < 0.3 { 2 } else if y_0 < 0.7 { 1 } else { 0 };
+        let sel_x_1 = if x_1 < 0.3 { 0 } else if x_1 < 0.7 { 1 } else { 2 };
+        let sel_y_1 = if y_1 < 0.3 { 2 } else if y_1 < 0.7 { 1 } else { 0 };
+        COORDINATES_CHANNEL
+            .send(Reading {
+                v_x_0: x_0_value,
+                v_y_0: y_0_value,
+                v_x_1: x_1_value,
+                v_y_1: y_1_value,
+                x_0,
+                y_0,
+                x_1,
+                y_1,
+                sel_x_0,
+                sel_y_0,
+                sel_x_1,
+                sel_y_1,
+                min_v,
+                max_v,
+                us: elapsed,
+            })
+            .await;
+
+        let charset = CHARSETS[(sel_x_1 + sel_y_1 * 3) as usize % CHARSETS.len()];
+        if x_0 < 0.1 || y_0 < 0.1 || x_0 > 0.9 || y_0 > 0.9 {
+            let select = sel_x_0 + sel_y_0 * 3;
+            let skip = if select < 4 {select } else { select - 1 };
+            let Some(char) = charset.chars().skip(skip as usize).next() else {
+                continue;
+            };
+            match keypress {
+                None => {
+                    println!("Key pressed: {}", char);
+                    keypress = Some(char);
+                }
+                Some(prev_char) if char != prev_char => {
+                    println!("Key released: {}", prev_char);
+                    println!("Key pressed: {}", char);
+                    keypress = Some(char);
+                }
+                Some(_) => {}
+            }
+        } else {
+            if let Some(char) = keypress.take() {
+                println!("Key released: {}", char);
+            }
+        }
+
+        Timer::after_millis(100).await;
+    }
+}

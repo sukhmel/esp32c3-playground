@@ -22,6 +22,7 @@ embassy-sync = { version = "0.8" }
 embassy-futures = "0.1"
 heapless = "0.9.3"
 num_enum = { version = "0.7.6", default-features = false }
+nb = "1"
 
 [patch.crates-io]
 esp-hal-smartled = { path = "patches/esp-hal-smartled" }
@@ -33,6 +34,7 @@ unexpected_cfgs = { level = "warn", check-cfg = [
 
 [features]
 async_ili9341 = ["sky-ili9341", "embedded-hal-bus/async", "embedded-hal-async"]
+agm1264f = []
 
 [build-dependencies]
 toml = "1"
