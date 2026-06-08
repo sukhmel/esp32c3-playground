@@ -5,7 +5,9 @@ extern crate alloc;
 include!(concat!(env!("OUT_DIR"), "/secrets.rs"));
 
 use crate::buzzer::{Melody, SoundLed};
-use crate::inter_task::{COORDINATES_CHANNEL, MESSAGE_CHANNEL, MESSAGE_SIZE, SOUND_CHANNEL};
+use crate::inter_task::{
+    CHAR_CHANNEL, COORDINATES_CHANNEL, MESSAGE_CHANNEL, MESSAGE_SIZE, SOUND_CHANNEL,
+};
 use crate::pins::Peripherals;
 use ariel_os::asynch::Spawner;
 use ariel_os::debug::log::{debug, error, info, warn};
@@ -27,6 +29,8 @@ mod buzzer;
 mod display;
 mod input;
 pub mod inter_task;
+#[cfg(feature = "keyboard")]
+mod keyboard;
 mod led;
 pub mod pins;
 
@@ -137,7 +141,7 @@ async fn run_echo_server(stack: Stack<'static>) -> ! {
             }
         }
 
-        loop {
+        'interaction: loop {
             match socket.read(&mut echo_buffer).await {
                 Ok(0) => {
                     break;
@@ -174,6 +178,28 @@ async fn run_echo_server(stack: Stack<'static>) -> ! {
                             }
                         }
                     }
+                    if n > 5 && &echo_buffer[0..5] == b"INPUT" {
+                        info!("Input started");
+                        begin = false;
+                        let mut char = heapless::String::<4>::new();
+                        CHAR_CHANNEL.clear();
+                        while let Ok(ch) =
+                            with_timeout(Duration::from_secs(15), CHAR_CHANNEL.receive()).await
+                        {
+                            if let Err(_) = core::fmt::write(&mut char, format_args!("{}", ch)) {
+                                warn!("Failed to write char: {}", ch);
+                                char.clear();
+                                continue;
+                            }
+                            if socket.write(char.as_bytes()).await.is_err() {
+                                warn!("Failed to write character");
+                                break 'interaction;
+                            }
+                            char.clear();
+                        }
+                        info!("Input finished");
+                        continue;
+                    }
                     if n > 5 && &echo_buffer[0..5] == b"PLAY " {
                         begin = false;
                         if let Ok(Ok(command)) = core::str::from_utf8(&echo_buffer[5..(n.min(7))])
@@ -204,7 +230,7 @@ async fn run_echo_server(stack: Stack<'static>) -> ! {
                     }
                     // CHANNEL.send(channel_msg).await;
                     if let Err(_) = MESSAGE_CHANNEL.try_send(channel_msg) {
-                        warn!("Channel full! Dropped log frame to prevent radio starvation.");
+                        warn!("Channel full! Dropped message");
                     }
                     if begin {
                         begin = false;

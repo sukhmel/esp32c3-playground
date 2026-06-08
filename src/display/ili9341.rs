@@ -1,9 +1,10 @@
-use crate::input::{value_to_percent, CHARSETS};
+use crate::input::{CHARSETS, value_to_percent};
 use crate::inter_task::{CoordinatesReceiver, MESSAGE_SIZE, MessageReceiver};
 use crate::rainbow::{RAINBOW_RGB565_128, RAINBOW_RGB565_256, rgb565_rainbow};
 use ariel_os::debug::log::{info, warn};
 use ariel_os::time::{Instant, Timer};
 use ariel_os_hal::gpio::Output;
+use core::fmt::Debug;
 use embassy_futures::select::{Either, select};
 use embedded_graphics::pixelcolor::Rgb565;
 use embedded_graphics::pixelcolor::raw::RawU16;
@@ -19,6 +20,7 @@ use embedded_graphics::{
     prelude::*,
     text::Text,
 };
+use embedded_graphics_framebuf::FrameBuf;
 use embedded_hal_bus::spi::ExclusiveDevice;
 use esp_hal::Blocking;
 use esp_hal::delay::Delay;
@@ -29,6 +31,7 @@ use mipidsi::options::{ColorOrder, Rotation};
 use mipidsi::{Builder, Display as DisplayImpl, models::ILI9341Rgb565, options::Orientation};
 
 static BAND_HEIGHT: i32 = 30;
+static POSITION_PAD_DIAMETER: usize = 240usize.checked_sub(4 * BAND_HEIGHT as usize).unwrap();
 
 fn rainbow_at(length: usize, step: usize) -> Rgb565 {
     let step = step % length;
@@ -49,6 +52,8 @@ macro_rules! pos_to_y {
         let y = $value * (BAND_HEIGHT - 1) as f32 + 1.0;
         base + BAND_HEIGHT + 1 - y as i32
     }};
+    // map to [0..(BAND_HEIGHT - 1)] so that drawing in box of BAND_HEIGHT height works, invert y
+    ($value: expr) => {{ BAND_HEIGHT - 1 - ($value * (BAND_HEIGHT - 1) as f32) as i32 }};
 }
 
 type DisplayAlias<'a, 'd> = DisplayImpl<
@@ -96,6 +101,15 @@ impl<'a, 'd> Display<'a, 'd> {
     }
 
     pub async fn draw_lines(&mut self, channel: CoordinatesReceiver) {
+        let mut position_frame_buffer_data =
+            [Rgb565::RED; POSITION_PAD_DIAMETER * POSITION_PAD_DIAMETER];
+        let mut position_frame_buffer = FrameBuf::new(
+            &mut position_frame_buffer_data,
+            POSITION_PAD_DIAMETER,
+            POSITION_PAD_DIAMETER,
+        );
+        let mut frame_buffer_data = [Rgb565::RED; (320 * BAND_HEIGHT) as usize];
+        let mut frame_buffer = FrameBuf::new(&mut frame_buffer_data, 320, BAND_HEIGHT as usize);
         let mut buffer_x0: Deque<i32, 350> = Deque::new();
         let mut buffer_y0: Deque<i32, 350> = Deque::new();
         let mut buffer_x1: Deque<i32, 350> = Deque::new();
@@ -104,13 +118,14 @@ impl<'a, 'd> Display<'a, 'd> {
         self.display.clear(Rgb565::RED).unwrap();
         for band in 1..=3 {
             Line::new(
-                Point::new(0, (BAND_HEIGHT + 1) * band),
-                Point::new(320, (BAND_HEIGHT + 1) * band),
+                Point::new(0, (BAND_HEIGHT + 1) * band - 1),
+                Point::new(320, (BAND_HEIGHT + 1) * band - 1),
             )
             .into_styled(PrimitiveStyle::with_stroke(Rgb565::BLACK, 1))
             .draw(&mut self.display)
             .unwrap();
         }
+        let mut time = None;
         loop {
             let coordinates = channel.receive().await;
             let start = Instant::now();
@@ -119,32 +134,44 @@ impl<'a, 'd> Display<'a, 'd> {
             let x1 = coordinates.x_1;
             let y1 = coordinates.y_1;
 
-            // TODO: drawing two graphs on the same band flickers, need to make redraw accept
-            //       several buffers and draw them all at once.
             redraw_and_fill(
-                &mut self.display,
+                &mut frame_buffer,
                 Rgb565::YELLOW,
-                pos_to_y!(x0, 0),
+                pos_to_y!(x0),
                 &mut buffer_x0,
             );
             redraw_and_fill(
-                &mut self.display,
+                &mut frame_buffer,
                 Rgb565::CSS_DARK_GREEN,
-                pos_to_y!(y0, 0),
+                pos_to_y!(y0),
                 &mut buffer_y0,
             );
+            self.display
+                .fill_contiguous(
+                    &Rectangle::new(Point::new(0, 0), frame_buffer.size()),
+                    frame_buffer.data.iter().copied(),
+                )
+                .unwrap();
+            frame_buffer.clear(Rgb565::RED).unwrap();
             redraw_and_fill(
-                &mut self.display,
+                &mut frame_buffer,
                 Rgb565::BLUE,
-                pos_to_y!(x1, 1),
+                pos_to_y!(x1),
                 &mut buffer_x1,
             );
             redraw_and_fill(
-                &mut self.display,
+                &mut frame_buffer,
                 Rgb565::CSS_VIOLET,
-                pos_to_y!(y1, 1),
+                pos_to_y!(y1),
                 &mut buffer_y1,
             );
+            self.display
+                .fill_contiguous(
+                    &Rectangle::new(Point::new(0, BAND_HEIGHT + 1), frame_buffer.size()),
+                    frame_buffer.data.iter().copied(),
+                )
+                .unwrap();
+            frame_buffer.clear(Rgb565::RED).unwrap();
             draw_min_max(
                 &mut self.display,
                 "V",
@@ -152,32 +179,80 @@ impl<'a, 'd> Display<'a, 'd> {
                 coordinates.max_v,
                 1,
             );
-            let select = draw_position(&mut self.display, x1, y1, 4, 1, "");
-            let charset = CHARSETS[ select ];
-            draw_position(&mut self.display, x0, y0, 4, 0, charset);
-            fill_and_draw_time(&mut self.display, start, &mut buffer_time, 2);
+
+            let select = coordinates.sel_x_1 + coordinates.sel_y_1 * 3;
+            let charset = CHARSETS[select as usize];
+            draw_position(
+                &mut position_frame_buffer,
+                x0,
+                y0,
+                coordinates.sel_x_0,
+                coordinates.sel_y_0,
+                coordinates.pressed,
+                charset,
+            );
+            self.display
+                .fill_contiguous(
+                    &Rectangle::new(
+                        Point::new(0, (BAND_HEIGHT + 1) * 4),
+                        position_frame_buffer.size(),
+                    ),
+                    position_frame_buffer.data.iter().copied(),
+                )
+                .unwrap();
+            position_frame_buffer.clear(Rgb565::RED).unwrap();
+
+            draw_position(
+                &mut position_frame_buffer,
+                x1,
+                y1,
+                coordinates.sel_x_1,
+                coordinates.sel_y_1,
+                false,
+                "",
+            );
+            self.display
+                .fill_contiguous(
+                    &Rectangle::new(
+                        Point::new((POSITION_PAD_DIAMETER + 10) as i32, (BAND_HEIGHT + 1) * 4),
+                        position_frame_buffer.size(),
+                    ),
+                    position_frame_buffer.data.iter().copied(),
+                )
+                .unwrap();
+            position_frame_buffer.clear(Rgb565::RED).unwrap();
+
+            if let Some((min, max)) = fill_and_draw_time(&mut frame_buffer, time, &mut buffer_time)
+            {
+                draw_min_max(&mut self.display, "t", min, max, 0);
+            }
+            self.display
+                .fill_contiguous(
+                    &Rectangle::new(Point::new(0, (BAND_HEIGHT + 1) * 2), frame_buffer.size()),
+                    frame_buffer.data.iter().copied(),
+                )
+                .unwrap();
+            frame_buffer.clear(Rgb565::RED).unwrap();
+            time = Some(start.elapsed().as_millis());
         }
     }
 }
 
-fn draw_position(
-    display: &mut DisplayAlias<'_, '_>,
+fn draw_position<T: DrawTarget<Color = Rgb565>>(
+    display: &mut T,
     x: f32,
     y: f32,
-    band: usize,
-    stick: usize,
+    selector_x: i8,
+    selector_y: i8,
+    pressed: bool,
     charset: &str,
-) -> usize {
-    let y_0 = (BAND_HEIGHT + 1) * band as i32 + 1;
-    let diameter = 235 - y_0;
-    let x_0 = 10 + (diameter + 10) * stick as i32;
-    Rectangle::new(
-        Point::new(x_0 - 1, y_0 - 1),
-        Size::new(diameter as u32 + 6, diameter as u32 + 6),
-    )
-    .into_styled(PrimitiveStyleBuilder::new().fill_color(Rgb565::RED).build())
-    .draw(display)
-    .unwrap();
+) where
+    <T as DrawTarget>::Error: Debug,
+{
+    let y_0 = 0;
+    let diameter = POSITION_PAD_DIAMETER as i32;
+    let margin = (POSITION_PAD_DIAMETER as f32 * 0.05) as i32;
+    let x_0 = 0;
     Rectangle::new(
         Point::new(x_0, y_0),
         Size::new(diameter as u32, diameter as u32),
@@ -185,43 +260,35 @@ fn draw_position(
     .into_styled(
         PrimitiveStyleBuilder::new()
             .stroke_width(1)
+            .fill_color(Rgb565::CSS_ORANGE_RED)
             .stroke_color(Rgb565::BLACK)
             .build(),
     )
     .draw(display)
     .unwrap();
-    let selector_x;
-    let selector_y;
-    if x < 0.3 {
-        selector_x = 0;
-    } else if x < 0.7 {
-        selector_x = 1;
-    } else {
-        selector_x = 2;
-    }
-    if y < 0.3 {
-        selector_y = 2;
-    } else if y < 0.7 {
-        selector_y = 1;
-    } else {
-        selector_y = 0;
-    }
-    let border = if charset.len() > 0 && (x < 0.1 || y < 0.1 || x > 0.9 || y > 0.9) {
-        3
-    } else {
-        1
-    };
+    Rectangle::new(
+        Point::new(x_0 + margin, y_0 + margin),
+        Size::new(
+            (diameter - margin * 2) as u32,
+            (diameter - margin * 2) as u32,
+        ),
+    )
+    .into_styled(PrimitiveStyleBuilder::new().fill_color(Rgb565::RED).build())
+    .draw(display)
+    .unwrap();
+
+    let border = if charset.len() > 0 && pressed { 3 } else { 1 };
     Rectangle::new(
         Point::new(
-            x_0 + diameter / 3 * selector_x,
-            y_0 + diameter / 3 * selector_y,
+            x_0 + diameter / 3 * selector_x as i32,
+            y_0 + diameter / 3 * selector_y as i32,
         ),
         Size::new(diameter as u32 / 3, diameter as u32 / 3),
     )
     .into_styled(
         PrimitiveStyleBuilder::new()
             .stroke_width(border)
-            .stroke_color(Rgb565::BLUE)
+            .stroke_color(Rgb565::CSS_ORANGE)
             .build(),
     )
     .draw(display)
@@ -265,7 +332,6 @@ fn draw_position(
         .unwrap();
         char.clear();
     }
-    (selector_x + selector_y * 3) as usize
 }
 
 fn draw_min_max<T: core::fmt::Display>(
@@ -277,7 +343,7 @@ fn draw_min_max<T: core::fmt::Display>(
 ) {
     let y_0 = (BAND_HEIGHT + 1) * 3 + 1;
     let x_0 = 10 + band * 110;
-    Rectangle::new(Point::new(x_0, y_0), Size::new(100, 16))
+    Rectangle::new(Point::new(x_0, y_0 + 6), Size::new(100, 13))
         .into_styled(PrimitiveStyleBuilder::new().fill_color(Rgb565::RED).build())
         .draw(display)
         .unwrap();
@@ -307,12 +373,14 @@ fn draw_min_max<T: core::fmt::Display>(
     .unwrap();
 }
 
-fn redraw_and_fill(
-    display: &mut DisplayAlias<'_, '_>,
+fn redraw_and_fill<T: DrawTarget<Color = Rgb565>>(
+    display: &mut T,
     color: Rgb565,
     value: i32,
     buffer: &mut Deque<i32, 350>,
-) {
+) where
+    <T as DrawTarget>::Error: Debug,
+{
     let previous = buffer.clone();
     buffer.push_back(value).unwrap();
     if buffer.len() > 320 {
@@ -331,7 +399,13 @@ fn redraw_and_fill(
     draw_buffer(display, buffer, color);
 }
 
-fn draw_buffer(display: &mut DisplayAlias<'_, '_>, buffer: &Deque<i32, 350>, color: Rgb565) {
+fn draw_buffer<T: DrawTarget<Color = Rgb565>>(
+    display: &mut T,
+    buffer: &Deque<i32, 350>,
+    color: Rgb565,
+) where
+    <T as DrawTarget>::Error: Debug,
+{
     for (index, value) in buffer.iter().enumerate() {
         Pixel(Point::new(index as i32, *value), color)
             .draw(display)
@@ -378,35 +452,33 @@ fn fill_and_draw_time_with_decay(
 /// draw_time(&mut self.display, start, &mut buffer_time);
 /// ```
 #[allow(dead_code)]
-fn fill_and_draw_time(
-    display: &mut DisplayAlias<'_, '_>,
-    start: Instant,
+fn fill_and_draw_time<T: DrawTarget<Color = Rgb565>>(
+    display: &mut T,
+    elapsed: Option<u64>,
     buffer_time: &mut Deque<u64, 350>,
-    band: usize,
-) {
-    Rectangle::new(
-        Point::new(0, (BAND_HEIGHT + 1) * band as i32 + 1),
-        Size::new(320, BAND_HEIGHT as u32),
-    )
-    .into_styled(PrimitiveStyle::with_fill(Rgb565::RED))
-    .draw(display)
-    .unwrap();
-    if let Some((min, max)) = draw_buffer_scaled(display, &buffer_time, band, Rgb565::WHITE) {
-        draw_min_max(display, "t", min, max, 0);
-    }
-    let elapsed_ms = start.elapsed().as_millis();
+) -> Option<(u64, u64)>
+where
+    <T as DrawTarget>::Error: Debug,
+{
+    let Some(elapsed_ms) = elapsed else {
+        return None;
+    };
+    let result = draw_buffer_scaled(display, &buffer_time, Rgb565::WHITE);
     buffer_time.push_back(elapsed_ms).unwrap();
     if buffer_time.len() > 320 {
         buffer_time.pop_front();
     }
+    result
 }
 
-fn draw_buffer_scaled(
-    display: &mut DisplayAlias<'_, '_>,
+fn draw_buffer_scaled<T: DrawTarget<Color = Rgb565>>(
+    display: &mut T,
     input_buffer: &Deque<u64, 350>,
-    band: usize,
     color: Rgb565,
-) -> Option<(u64, u64)> {
+) -> Option<(u64, u64)>
+where
+    <T as DrawTarget>::Error: Debug,
+{
     if input_buffer.len() < 1 {
         return None;
     }
@@ -421,7 +493,7 @@ fn draw_buffer_scaled(
         }
     }
     for (index, raw_value) in input_buffer.iter().enumerate() {
-        let value = pos_to_y!(value_to_percent!(*raw_value, min, max, false), band);
+        let value = pos_to_y!(value_to_percent!(*raw_value, min, max, false));
         Pixel(Point::new(index as i32, value), color)
             .draw(display)
             .unwrap();

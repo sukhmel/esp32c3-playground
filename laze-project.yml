@@ -8,8 +8,8 @@ apps:
   - name: esp32c3-playground
     selects:
       - network
-    env:
-      global:
-        CARGO_ENV:
-          # this is only necessary for async display driver, since it can't draw without buffer
-          - "CONFIG_HEAPSIZE=220000"
+# this is only necessary for async display driver, since it can't draw without buffer
+#    env:
+#      global:
+#        CARGO_ENV:
+#        - "CONFIG_HEAPSIZE=220000"

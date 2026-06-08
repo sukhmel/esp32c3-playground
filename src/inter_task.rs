@@ -15,6 +15,7 @@ pub const CHANNEL_SIZE: usize = 2;
 pub static MESSAGE_CHANNEL: MessageChannelType = Channel::new();
 pub static SOUND_CHANNEL: SoundChannelType = Channel::new();
 pub static COORDINATES_CHANNEL: CoordinatesChannelType = Channel::new();
+pub static CHAR_CHANNEL: Channel<CriticalSectionRawMutex, char, CHANNEL_SIZE> = Channel::new();
 
 #[derive(Debug)]
 pub struct Reading {
@@ -29,8 +30,9 @@ pub struct Reading {
     pub min_v: u16,
     pub max_v: u16,
     pub us: u64,
-    pub sel_x_0: i32,
-    pub sel_y_0: i32,
-    pub sel_x_1: i32,
-    pub sel_y_1: i32,
+    pub sel_x_0: i8,
+    pub sel_y_0: i8,
+    pub sel_x_1: i8,
+    pub sel_y_1: i8,
+    pub pressed: bool,
 }
