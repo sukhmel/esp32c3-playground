@@ -68,7 +68,7 @@ async fn ui(peripherals: Peripherals) {
     let rmt = Rmt::new(peripherals.binary.rmt, Rate::from_mhz(80)).unwrap();
     let buzzer = SoundLed::new(peripherals.binary.pin19, ledc, peripherals.binary.pin8, rmt);
     join3(
-        display.draw_lines(COORDINATES_CHANNEL.receiver()),
+        display.debug_input(COORDINATES_CHANNEL.receiver(), MESSAGE_CHANNEL.receiver()),
         buzzer.control(SOUND_CHANNEL.receiver()),
         input::read_joystick(peripherals.analog),
     )
@@ -100,7 +100,7 @@ async fn network(spawner: Spawner) {
         let mut channel_msg = heapless::String::<MESSAGE_SIZE>::new();
         if core::fmt::write(
             &mut channel_msg,
-            format_args!("listening on {}:8080", ip.address.address()),
+            format_args!("{}:8080", ip.address.address()),
         )
         .is_ok()
         {
@@ -218,6 +218,7 @@ async fn run_echo_server(stack: Stack<'static>) -> ! {
                                     let _ = socket.write(name.as_bytes()).await;
                                 }
                                 SOUND_CHANNEL.send(Some(melody)).await;
+                                continue;
                             } else {
                                 warn!("Invalid command received: {}", command);
                             }

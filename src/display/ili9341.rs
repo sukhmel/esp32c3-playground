@@ -15,7 +15,7 @@ use embedded_graphics::{
     geometry::Point,
     mono_font::{
         MonoTextStyle,
-        iso_8859_5::{FONT_8X13_ITALIC, FONT_9X18, FONT_9X18_BOLD, FONT_10X20},
+        iso_8859_5::{FONT_8X13_ITALIC, FONT_8X13_BOLD, FONT_9X18, FONT_9X18_BOLD, FONT_10X20},
     },
     prelude::*,
     text::Text,
@@ -100,9 +100,10 @@ impl<'a, 'd> Display<'a, 'd> {
         }
     }
 
-    pub async fn draw_lines(&mut self, channel: CoordinatesReceiver) {
+    pub async fn debug_input(&mut self, channel: CoordinatesReceiver, address: MessageReceiver) {
+        let mut message = None;
         let mut position_frame_buffer_data =
-            [Rgb565::RED; POSITION_PAD_DIAMETER * POSITION_PAD_DIAMETER];
+            [Rgb565::CSS_ORANGE_RED; POSITION_PAD_DIAMETER * POSITION_PAD_DIAMETER];
         let mut position_frame_buffer = FrameBuf::new(
             &mut position_frame_buffer_data,
             POSITION_PAD_DIAMETER,
@@ -174,10 +175,10 @@ impl<'a, 'd> Display<'a, 'd> {
             frame_buffer.clear(Rgb565::RED).unwrap();
             draw_min_max(
                 &mut self.display,
-                "V",
+                'V',
                 coordinates.min_v,
                 coordinates.max_v,
-                1,
+                0,
             );
 
             let select = coordinates.sel_x_1 + coordinates.sel_y_1 * 3;
@@ -220,12 +221,9 @@ impl<'a, 'd> Display<'a, 'd> {
                     position_frame_buffer.data.iter().copied(),
                 )
                 .unwrap();
-            position_frame_buffer.clear(Rgb565::RED).unwrap();
+            position_frame_buffer.clear(Rgb565::CSS_ORANGE_RED).unwrap();
 
-            if let Some((min, max)) = fill_and_draw_time(&mut frame_buffer, time, &mut buffer_time)
-            {
-                draw_min_max(&mut self.display, "t", min, max, 0);
-            }
+            fill_and_draw_time(&mut frame_buffer, time, &mut buffer_time);
             self.display
                 .fill_contiguous(
                     &Rectangle::new(Point::new(0, (BAND_HEIGHT + 1) * 2), frame_buffer.size()),
@@ -233,6 +231,13 @@ impl<'a, 'd> Display<'a, 'd> {
                 )
                 .unwrap();
             frame_buffer.clear(Rgb565::RED).unwrap();
+
+            if message.is_none() && let Ok(line) = address.try_peek() {
+                let mut value = heapless::String::<22>::new();
+                value.push_str(line.split_at_checked(22).map(|(s, _)| s).unwrap_or(line.as_str())).unwrap();
+                draw_text(&mut self.display, &value, 1);
+                message = Some(value);
+            }
             time = Some(start.elapsed().as_millis());
         }
     }
@@ -260,7 +265,7 @@ fn draw_position<T: DrawTarget<Color = Rgb565>>(
     .into_styled(
         PrimitiveStyleBuilder::new()
             .stroke_width(1)
-            .fill_color(Rgb565::CSS_ORANGE_RED)
+            .fill_color(Rgb565::CSS_LIGHT_SALMON)
             .stroke_color(Rgb565::BLACK)
             .build(),
     )
@@ -273,7 +278,7 @@ fn draw_position<T: DrawTarget<Color = Rgb565>>(
             (diameter - margin * 2) as u32,
         ),
     )
-    .into_styled(PrimitiveStyleBuilder::new().fill_color(Rgb565::RED).build())
+    .into_styled(PrimitiveStyleBuilder::new().fill_color(Rgb565::CSS_ORANGE_RED).build())
     .draw(display)
     .unwrap();
 
@@ -334,11 +339,57 @@ fn draw_position<T: DrawTarget<Color = Rgb565>>(
     }
 }
 
+fn draw_axis_min_max<T: DrawTarget<Color = Rgb565>, M: core::fmt::Display>(
+    display: &mut T,
+    min: M,
+    max: M,
+) where <T as DrawTarget>::Error: Debug {
+    // 8x13 font numbers are 9 pixels high, text is drawn up from the point.
+    let mut value = heapless::String::<22>::new();
+    let Ok(_) = core::fmt::write(&mut value, format_args!("{}", max)) else {
+        info!("Failed to write max");
+        return;
+    };
+    Text::new(
+        &value,
+        Point::new(1, 10),
+        MonoTextStyle::new(&FONT_8X13_BOLD, Rgb565::BLACK),
+    )
+    .draw(display)
+    .unwrap();
+
+    value.clear();
+    let Ok(_) = core::fmt::write(&mut value, format_args!("{}", min)) else {
+        info!("Failed to write min");
+        return;
+    };
+    Text::new(
+        &value,
+        Point::new(1, BAND_HEIGHT - 2),
+        MonoTextStyle::new(&FONT_8X13_BOLD, Rgb565::BLACK),
+    )
+        .draw(display)
+        .unwrap();
+}
+
 fn draw_min_max<T: core::fmt::Display>(
     display: &mut DisplayAlias<'_, '_>,
-    prefix: &str,
+    prefix: char,
     min: T,
     max: T,
+    band: i32,
+) {
+    let mut value = heapless::String::<22>::new();
+    let Ok(_) = core::fmt::write(&mut value, format_args!("{}={:4}, {:4}", prefix, min, max)) else {
+        info!("Failed to write min and max");
+        return;
+    };
+    draw_text(display, &value, band);
+}
+
+fn draw_text(
+    display: &mut DisplayAlias<'_, '_>,
+    value: &heapless::String<22>,
     band: i32,
 ) {
     let y_0 = (BAND_HEIGHT + 1) * 3 + 1;
@@ -347,26 +398,9 @@ fn draw_min_max<T: core::fmt::Display>(
         .into_styled(PrimitiveStyleBuilder::new().fill_color(Rgb565::RED).build())
         .draw(display)
         .unwrap();
-    let mut value = heapless::String::<8>::new();
-    let Ok(_) = core::fmt::write(&mut value, format_args!("{}={:4}, ", prefix, min)) else {
-        info!("Failed to write min");
-        return;
-    };
-    let end = Text::new(
-        &value,
-        Point::new(x_0, y_0 + 15),
-        MonoTextStyle::new(&FONT_8X13_ITALIC, Rgb565::BLACK),
-    )
-    .draw(display)
-    .unwrap();
-    value.clear();
-    let Ok(_) = core::fmt::write(&mut value, format_args!("{}", max)) else {
-        info!("Failed to write max");
-        return;
-    };
     Text::new(
-        &value,
-        end,
+        value,
+        Point::new(x_0, y_0 + 15),
         MonoTextStyle::new(&FONT_8X13_ITALIC, Rgb565::BLACK),
     )
     .draw(display)
@@ -436,7 +470,7 @@ fn fill_and_draw_time_with_decay(
 ) {
     if let Some(t) = time {
         redraw_and_fill(display, Rgb565::WHITE, pos_to_y!(*t, 4), buffer_time);
-        draw_min_max(display, "t", *min_time, *max_time, 0);
+        draw_min_max(display, 't', *min_time, *max_time, 0);
     }
     let elapsed_ms = start.elapsed().as_millis();
     *min_time = (*min_time as f32 * (1.0 + decay)) as u64;
@@ -456,19 +490,21 @@ fn fill_and_draw_time<T: DrawTarget<Color = Rgb565>>(
     display: &mut T,
     elapsed: Option<u64>,
     buffer_time: &mut Deque<u64, 350>,
-) -> Option<(u64, u64)>
+)
 where
     <T as DrawTarget>::Error: Debug,
 {
     let Some(elapsed_ms) = elapsed else {
-        return None;
+        return;
     };
-    let result = draw_buffer_scaled(display, &buffer_time, Rgb565::WHITE);
+    if let Some((min, max)) = draw_buffer_scaled(display, &buffer_time, Rgb565::WHITE) {
+        draw_axis_min_max(display, min, max);
+    }
+
     buffer_time.push_back(elapsed_ms).unwrap();
     if buffer_time.len() > 320 {
         buffer_time.pop_front();
     }
-    result
 }
 
 fn draw_buffer_scaled<T: DrawTarget<Color = Rgb565>>(
