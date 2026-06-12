@@ -30,6 +30,12 @@ use mipidsi::interface::SpiInterface;
 use mipidsi::options::{ColorOrder, Rotation};
 use mipidsi::{Builder, Display as DisplayImpl, models::ILI9341Rgb565, options::Orientation};
 
+static INPUT_COLORS: [Rgb565; 4] = [
+    Rgb565::BLUE,
+    Rgb565::CSS_VIOLET,
+    Rgb565::YELLOW,
+    Rgb565::CSS_DARK_GREEN,
+];
 static BAND_HEIGHT: i32 = 30;
 static POSITION_PAD_DIAMETER: usize = 240usize.checked_sub(4 * BAND_HEIGHT as usize).unwrap();
 
@@ -127,6 +133,8 @@ impl<'a, 'd> Display<'a, 'd> {
             .unwrap();
         }
         let mut time = None;
+        let mut min_v = u16::MAX;
+        let mut max_v = u16::MIN;
         loop {
             let coordinates = channel.receive().await;
             let start = Instant::now();
@@ -137,34 +145,15 @@ impl<'a, 'd> Display<'a, 'd> {
 
             redraw_and_fill(
                 &mut frame_buffer,
-                Rgb565::YELLOW,
+                INPUT_COLORS[0],
                 pos_to_y!(x0),
                 &mut buffer_x0,
             );
             redraw_and_fill(
                 &mut frame_buffer,
-                Rgb565::CSS_DARK_GREEN,
+                INPUT_COLORS[1],
                 pos_to_y!(y0),
                 &mut buffer_y0,
-            );
-            self.display
-                .fill_contiguous(
-                    &Rectangle::new(Point::new(0, 0), frame_buffer.size()),
-                    frame_buffer.data.iter().copied(),
-                )
-                .unwrap();
-            frame_buffer.clear(Rgb565::RED).unwrap();
-            redraw_and_fill(
-                &mut frame_buffer,
-                Rgb565::BLUE,
-                pos_to_y!(x1),
-                &mut buffer_x1,
-            );
-            redraw_and_fill(
-                &mut frame_buffer,
-                Rgb565::CSS_VIOLET,
-                pos_to_y!(y1),
-                &mut buffer_y1,
             );
             self.display
                 .fill_contiguous(
@@ -173,13 +162,36 @@ impl<'a, 'd> Display<'a, 'd> {
                 )
                 .unwrap();
             frame_buffer.clear(Rgb565::RED).unwrap();
-            draw_min_max(
-                &mut self.display,
-                'V',
-                coordinates.min_v,
-                coordinates.max_v,
-                0,
+            redraw_and_fill(
+                &mut frame_buffer,
+                INPUT_COLORS[2],
+                pos_to_y!(x1),
+                &mut buffer_x1,
             );
+            redraw_and_fill(
+                &mut frame_buffer,
+                INPUT_COLORS[3],
+                pos_to_y!(y1),
+                &mut buffer_y1,
+            );
+            self.display
+                .fill_contiguous(
+                    &Rectangle::new(Point::new(0, 0), frame_buffer.size()),
+                    frame_buffer.data.iter().copied(),
+                )
+                .unwrap();
+            frame_buffer.clear(Rgb565::RED).unwrap();
+            if min_v != coordinates.min_v || max_v != coordinates.max_v {
+                min_v = coordinates.min_v;
+                max_v = coordinates.max_v;
+                draw_min_max(
+                    &mut self.display,
+                    'V',
+                    min_v,
+                    max_v,
+                    0,
+                );
+            }
 
             let select = coordinates.sel_x_1 + coordinates.sel_y_1 * 3;
             let charset = CHARSETS[select as usize];
@@ -195,7 +207,7 @@ impl<'a, 'd> Display<'a, 'd> {
             self.display
                 .fill_contiguous(
                     &Rectangle::new(
-                        Point::new(0, (BAND_HEIGHT + 1) * 4),
+                        Point::new((POSITION_PAD_DIAMETER + 10) as i32, (BAND_HEIGHT + 1) * 4),
                         position_frame_buffer.size(),
                     ),
                     position_frame_buffer.data.iter().copied(),
@@ -215,7 +227,7 @@ impl<'a, 'd> Display<'a, 'd> {
             self.display
                 .fill_contiguous(
                     &Rectangle::new(
-                        Point::new((POSITION_PAD_DIAMETER + 10) as i32, (BAND_HEIGHT + 1) * 4),
+                        Point::new(0, (BAND_HEIGHT + 1) * 4),
                         position_frame_buffer.size(),
                     ),
                     position_frame_buffer.data.iter().copied(),

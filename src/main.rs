@@ -49,7 +49,7 @@ async fn ui(peripherals: Peripherals) {
     info!("Starting UI");
     let raw_spi = Spi::new(
         peripherals.binary.spi,
-        Config::default().with_frequency(Rate::from_mhz(40)),
+        Config::default().with_frequency(Rate::from_mhz(60)),
     )
     .unwrap()
     .with_miso(peripherals.binary.pin20)
@@ -89,12 +89,7 @@ async fn network(spawner: Spawner) {
     );
     let net = ariel_os::net::network_stack().await.unwrap();
     info!("Connecting to {}", WIFI_SSID);
-    if with_timeout(Duration::from_secs(10), net.wait_config_up())
-        .await
-        .is_err()
-    {
-        info!("wait_config_up timed out, continuing anyway");
-    };
+    net.wait_config_up().await;
     if let Some(ip) = net.config_v4() {
         info!("IP: {:?}", ip.address.address());
         let mut channel_msg = heapless::String::<MESSAGE_SIZE>::new();

@@ -45,10 +45,10 @@ pub async fn read_joystick(peripherals: AnalogPeripherals) {
     let mut min_v = DEFAULT_MIN_V;
     let mut max_v = DEFAULT_MAX_V;
     let mut adc1_config = AdcConfig::new();
-    let mut x_0 = adc1_config.enable_pin(peripherals.pin1, Attenuation::_11dB);
-    let mut y_0 = adc1_config.enable_pin(peripherals.pin0, Attenuation::_11dB);
-    let mut x_1 = adc1_config.enable_pin(peripherals.pin3, Attenuation::_11dB);
-    let mut y_1 = adc1_config.enable_pin(peripherals.pin2, Attenuation::_11dB);
+    let mut x_0 = adc1_config.enable_pin(peripherals.pin3, Attenuation::_11dB);
+    let mut y_0 = adc1_config.enable_pin(peripherals.pin2, Attenuation::_11dB);
+    let mut x_1 = adc1_config.enable_pin(peripherals.pin1, Attenuation::_11dB);
+    let mut y_1 = adc1_config.enable_pin(peripherals.pin0, Attenuation::_11dB);
     let mut adc1 = Adc::new(peripherals.adc1, adc1_config);
     let mut keypress = None;
     let mut keypress_cycle = 0;
