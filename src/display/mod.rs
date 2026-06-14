@@ -6,7 +6,7 @@ pub mod ili9341;
 pub mod ili9341_async;
 
 use crate::input::{CHARSETS, value_to_percent};
-use crate::inter_task::{CoordinatesReceiver, MESSAGE_SIZE, MessageReceiver, Reading};
+use crate::inter_task::{CoordinatesReceiver, MESSAGE_SIZE, MessageReceiver, Reading, TouchReceiver};
 use crate::rainbow::{RAINBOW_RGB565_128, RAINBOW_RGB565_256, rgb565_rainbow};
 use ariel_os::debug::log::{info, warn};
 use ariel_os::time::{Duration, Instant, Timer};
@@ -32,6 +32,7 @@ use heapless::Deque;
 pub use ili9341_async::Display;
 #[cfg(not(feature = "async_ili9341"))]
 pub use ili9341::Display;
+use crate::touch::TouchInputResponse;
 
 static INPUT_COLORS: [Rgb565; 4] = [
     Rgb565::BLUE,
@@ -98,6 +99,7 @@ pub async fn debug_input<T: DisplayTarget>(
     display: &mut T,
     channel: CoordinatesReceiver,
     address: MessageReceiver,
+    touch: TouchReceiver,
 ) {
     let mut message = None;
     let mut position_frame_buffer_data =
@@ -109,6 +111,7 @@ pub async fn debug_input<T: DisplayTarget>(
     );
     let mut frame_buffer_data = [Rgb565::RED; (320 * BAND_HEIGHT) as usize];
     let mut frame_buffer = FrameBuf::new(&mut frame_buffer_data, 320, BAND_HEIGHT as usize);
+    let mut buffer_touch: Deque<TouchInputResponse, 350> = Deque::new();
     let mut buffer_x0: Deque<i32, 350> = Deque::new();
     let mut buffer_y0: Deque<i32, 350> = Deque::new();
     let mut buffer_x1: Deque<i32, 350> = Deque::new();
@@ -166,15 +169,36 @@ pub async fn debug_input<T: DisplayTarget>(
                 buffer_y1.pop_front();
             }
         }
+        while let Ok(touch) = touch.try_receive() {
+            loaded += 1;
+            match &touch {
+                TouchInputResponse::Moved { x, y } => {
+                    info!("touch: moved {} {}", x, y);
+                }
+                TouchInputResponse::Pressed { x, y } => {
+                    info!("touch: pressed {} {}", x, y);
+                }
+                TouchInputResponse::Released { x, y } => {
+                    info!("touch: released {} {}", x, y);
+                }
+                _ => {}
+            }
+            buffer_touch.push_back(touch).unwrap();
+
+            if buffer_touch.len() > 320 {
+                buffer_touch.pop_front();
+            }
+        }
         if loaded == 0 {
             Timer::after(Duration::from_millis(100)).await;
             continue;
         }
-        draw_buffer(&mut frame_buffer, &buffer_x0, INPUT_COLORS[0]);
-        draw_buffer(&mut frame_buffer, &buffer_y0, INPUT_COLORS[1]);
+        draw_buffer(&mut frame_buffer, &buffer_x1, INPUT_COLORS[2]);
+        draw_buffer(&mut frame_buffer, &buffer_y1, INPUT_COLORS[3]);
+        draw_touch_buffer(&mut frame_buffer, &mut buffer_touch, 0, Rgb565::WHITE);
         display
             .draw(
-                Point::new(0, BAND_HEIGHT + 1),
+                Point::new(0, 0),
                 frame_buffer.size(),
                 frame_buffer.data.iter().copied(),
             )
@@ -182,11 +206,12 @@ pub async fn debug_input<T: DisplayTarget>(
             .unwrap();
         frame_buffer.clear(Rgb565::RED).unwrap();
 
-        draw_buffer(&mut frame_buffer, &buffer_x1, INPUT_COLORS[2]);
-        draw_buffer(&mut frame_buffer, &buffer_y1, INPUT_COLORS[3]);
+        draw_buffer(&mut frame_buffer, &buffer_x0, INPUT_COLORS[0]);
+        draw_buffer(&mut frame_buffer, &buffer_y0, INPUT_COLORS[1]);
+        draw_touch_buffer(&mut frame_buffer, &mut buffer_touch, BAND_HEIGHT, Rgb565::WHITE);
         display
             .draw(
-                Point::new(0, 0),
+                Point::new(0, BAND_HEIGHT + 1),
                 frame_buffer.size(),
                 frame_buffer.data.iter().copied(),
             )
@@ -255,6 +280,7 @@ pub async fn debug_input<T: DisplayTarget>(
         }
 
         fill_and_draw_time(&mut frame_buffer, time, &mut buffer_time);
+        draw_touch_buffer(&mut frame_buffer, &mut buffer_touch, BAND_HEIGHT * 2, Rgb565::WHITE);
         display
             .draw(
                 Point::new(0, (BAND_HEIGHT + 1) * 2),
@@ -284,6 +310,31 @@ pub async fn debug_input<T: DisplayTarget>(
     }
 }
 
+fn draw_touch_buffer<T: DrawTarget<Color = Rgb565>>(display: &mut T, buffer_touch: &mut Deque<TouchInputResponse, 350>, shift: i32, color: Rgb565)
+where <T as DrawTarget>::Error: Debug {
+    let mut x_0 = -1;
+    let mut y_0 = -1;
+    for touch in buffer_touch.iter() {
+        match touch {
+            TouchInputResponse::Pressed { x, y } => {
+                x_0 = *x;
+                y_0 = *y;
+            }
+            TouchInputResponse::Moved { x, y } | TouchInputResponse::Released { x, y } => {
+                if x_0 >= 0 && y_0 >= 0 {
+                    Line::new(Point::new(x_0, y_0 - shift), Point::new(*x, *y - shift))
+                        .into_styled(PrimitiveStyle::with_stroke(color, 1))
+                        .draw(display)
+                        .unwrap();
+                }
+                x_0 = *x;
+                y_0 = *y;
+            }
+            _ => {}
+        }
+    }
+}
+
 fn draw_position<T: DrawTarget<Color = Rgb565>>(
     display: &mut T,
     x: f32,
@@ -293,7 +344,7 @@ fn draw_position<T: DrawTarget<Color = Rgb565>>(
     pressed: bool,
     charset: &str,
 ) where
-    <T as DrawTarget>::Error: Debug,
+    <T as DrawTarget>::Error: Debug
 {
     let y_0 = 0;
     let diameter = POSITION_PAD_DIAMETER as i32;

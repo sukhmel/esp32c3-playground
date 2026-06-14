@@ -53,8 +53,8 @@ impl<'a, 'd, 's> Display<'a, 'd, 's> {
         print_text(&mut self.display, channel).await
     }
 
-    pub async fn debug_input(&mut self, channel: CoordinatesReceiver, address: MessageReceiver) {
-        debug_input(self, channel, address).await
+    pub async fn debug_input(&mut self, channel: CoordinatesReceiver, address: MessageReceiver, touch: TouchReceiver) {
+        debug_input(self, channel, address, touch).await
     }
 }
 

@@ -24,6 +24,7 @@ nb = "1"
 num_enum = { version = "0.7.6", default-features = false }
 smart-leds = "0.4"
 sky-ili9341 = { version = "0.1", features = ["async", "graphics"], optional = true }
+xpt2046-async = { git = "https://github.com/sukhmel/xpt2046_async.git" }
 
 [patch.crates-io]
 esp-hal-smartled = { path = "patches/esp-hal-smartled" }

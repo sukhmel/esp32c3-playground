@@ -1722,6 +1722,7 @@ dependencies = [
  "sky-ili9341",
  "smart-leds",
  "toml",
+ "xpt2046-async",
 ]
 
 [[package]]
@@ -3242,6 +3243,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0592e1c9d151f854e6fd382574c3a0855250e1d9b2f99d9281c6e6391af352f1"
 dependencies = [
  "memchr",
+]
+
+[[package]]
+name = "xpt2046-async"
+version = "0.3.1"
+source = "git+https://github.com/sukhmel/xpt2046_async.git#fa09f91efcbe67f3b274665296a5f3dd2f8bd905"
+dependencies = [
+ "embedded-graphics-core",
+ "embedded-hal 1.0.0",
+ "embedded-hal-async",
 ]
 
 [[package]]

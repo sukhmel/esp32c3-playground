@@ -116,7 +116,6 @@ impl<'a, T: OutputPin, U: OutputPin> SoundLed<'a, T, U> {
 pub async fn buzz(pin: impl OutputPin, mut ledc: Ledc<'static>, channel: SoundReceiver) {
     ledc.set_global_slow_clock(LSGlobalClkSource::APBClk);
     let mut buzzer = Buzzer::new(&ledc, timer::Number::Timer0, channel::Number::Channel1, pin);
-    buzzer.set_volume(2).unwrap();
     let mut melody = None;
     loop {
         match select(play(&mut buzzer, melody.take(), None), channel.receive()).await {

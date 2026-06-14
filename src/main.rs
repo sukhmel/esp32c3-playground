@@ -4,10 +4,8 @@ extern crate alloc;
 
 include!(concat!(env!("OUT_DIR"), "/secrets.rs"));
 
-use crate::buzzer::{Melody, SoundLed};
-use crate::inter_task::{
-    CHAR_CHANNEL, COORDINATES_CHANNEL, MESSAGE_CHANNEL, MESSAGE_SIZE, SOUND_CHANNEL,
-};
+use crate::buzzer::{buzz, Melody, SoundLed};
+use crate::inter_task::{CHAR_CHANNEL, COORDINATES_CHANNEL, MESSAGE_CHANNEL, MESSAGE_SIZE, SOUND_CHANNEL, TOUCH_CHANNEL};
 use crate::pins::Peripherals;
 use ariel_os::asynch::Spawner;
 use ariel_os::debug::log::{debug, error, info, warn};
@@ -17,20 +15,18 @@ use ariel_os_hal::gpio::{Level, Output};
 #[cfg(not(feature = "async_ili9341"))]
 use core::cell::RefCell;
 use display::Display;
-#[cfg(feature = "async_ili9341")]
-use embassy_embedded_hal::shared_bus::asynch::spi::SpiDevice;
-use embassy_futures::join::join3;
+use embassy_futures::join::{join3, join4};
 #[cfg(feature = "async_ili9341")]
 use embassy_sync::blocking_mutex::raw::NoopRawMutex;
 #[cfg(not(feature = "async_ili9341"))]
 use embedded_hal_bus::spi::RefCellDevice;
 #[cfg(not(feature = "async_ili9341"))]
 use esp_hal::delay::Delay;
-use esp_hal::gpio::OutputPin;
+use esp_hal::gpio::{OutputPin};
 use esp_hal::ledc::Ledc;
-use esp_hal::rmt::Rmt;
 use esp_hal::spi::master::{Config, Spi};
 use esp_hal::time::Rate;
+use crate::touch::Xpt2046TouchInput;
 
 mod buzzer;
 mod display;
@@ -40,6 +36,7 @@ pub mod inter_task;
 mod keyboard;
 mod led;
 pub mod pins;
+mod touch;
 
 pub mod rainbow {
     include!(concat!(env!("OUT_DIR"), "/rainbows.rs"));
@@ -56,7 +53,7 @@ async fn ui(peripherals: Peripherals) {
     info!("Starting UI");
     let raw_spi = Spi::new(
         peripherals.binary.spi,
-        Config::default().with_frequency(Rate::from_mhz(2)),
+        Config::default().with_frequency(Rate::from_mhz(5)),
     )
     .unwrap()
     .with_miso(peripherals.binary.pin5)
@@ -75,20 +72,19 @@ async fn ui(peripherals: Peripherals) {
     let mut buffer = [0u8; 512];
     #[cfg(not(feature = "async_ili9341"))]
     let mut display = Display::new(&shared_spi, cs_pin, dc_pin, rst_pin, &mut buffer);
-    let touch_cs_pin = Output::new(peripherals.binary.pin4, Level::High);
     #[cfg(not(feature = "async_ili9341"))]
     let touch_spi = RefCellDevice::new(&shared_spi, touch_cs_pin, Delay::new()).unwrap();
-    #[cfg(feature = "async_ili9341")]
-    let touch_spi = SpiDevice::new(&shared_spi, touch_cs_pin);
+    let mut touch = Xpt2046TouchInput::create(&shared_spi, peripherals.binary.pin4, peripherals.binary.pin8, 320).unwrap();
     #[cfg(feature = "async_ili9341")]
     let mut display = Display::new(&shared_spi, cs_pin, dc_pin, rst_pin).await;
     let ledc = Ledc::new(peripherals.binary.ledc);
-    let rmt = Rmt::new(peripherals.binary.rmt, Rate::from_mhz(80)).unwrap();
-    let buzzer = SoundLed::new(peripherals.binary.pin19, ledc, peripherals.binary.pin8, rmt);
-    join3(
-        display.debug_input(COORDINATES_CHANNEL.receiver(), MESSAGE_CHANNEL.receiver()),
-        buzzer.control(SOUND_CHANNEL.receiver()),
+    // let rmt = Rmt::new(peripherals.binary.rmt, Rate::from_mhz(80)).unwrap();
+    // let buzzer = SoundLed::new(peripherals.binary.pin19, ledc, peripherals.binary.pin8, rmt);
+    join4(
+        display.debug_input(COORDINATES_CHANNEL.receiver(), MESSAGE_CHANNEL.receiver(), TOUCH_CHANNEL.receiver()),
+        buzz(peripherals.binary.pin19, ledc, SOUND_CHANNEL.receiver()),
         input::read_joystick(peripherals.analog),
+        touch.run(),
     )
     .await;
     info!("Finished UI");
@@ -96,7 +92,7 @@ async fn ui(peripherals: Peripherals) {
 
 #[allow(dead_code)]
 async fn blast_sound<'a>(speaker: impl OutputPin, ledc: Ledc<'static>) {
-    buzzer::buzz(speaker, ledc, SOUND_CHANNEL.receiver()).await;
+    buzz(speaker, ledc, SOUND_CHANNEL.receiver()).await;
 }
 
 #[ariel_os::task()]
