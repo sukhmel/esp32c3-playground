@@ -6,6 +6,7 @@ edition = "2024"
 [dependencies]
 ariel-os = { path = "build/imports/ariel-os/src/ariel-os", features = ["time", "wifi-esp", "net", "ipv4", "dns", "tcp"], default-features = false }
 ariel-os-hal = { path = "build/imports/ariel-os/src/ariel-os-hal" }
+embassy-embedded-hal = { version = "0.6", optional = true }
 embassy-futures = "0.1"
 embassy-sync = { version = "0.8" }
 embassy-usb = { version = "0.6", optional = true }
@@ -33,7 +34,7 @@ unexpected_cfgs = { level = "warn", check-cfg = [
 ] }
 
 [features]
-async_ili9341 = ["sky-ili9341", "embedded-hal-bus/async", "embedded-hal-async"]
+async_ili9341 = ["sky-ili9341", "embedded-hal-bus/async", "embedded-hal-async", "embassy-embedded-hal"]
 agm1264f = []
 # esp32c3 does not support acting as a HID, I will need to try this again with esp32s3
 keyboard = ["embassy-usb"]

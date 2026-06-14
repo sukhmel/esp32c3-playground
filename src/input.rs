@@ -137,25 +137,24 @@ pub async fn read_joystick(peripherals: AnalogPeripherals) {
             keypress_cycle = 0;
         }
 
-        if let Err(_) = COORDINATES_CHANNEL
-            .try_send(Reading {
-                v_x_0: x_0_value,
-                v_y_0: y_0_value,
-                v_x_1: x_1_value,
-                v_y_1: y_1_value,
-                x_0,
-                y_0,
-                x_1,
-                y_1,
-                sel_x_0,
-                sel_y_0,
-                sel_x_1,
-                sel_y_1,
-                min_v,
-                max_v,
-                us: elapsed,
-                pressed: keypress.is_some(),
-            }) {
+        if let Err(_) = COORDINATES_CHANNEL.try_send(Reading {
+            v_x_0: x_0_value,
+            v_y_0: y_0_value,
+            v_x_1: x_1_value,
+            v_y_1: y_1_value,
+            x_0,
+            y_0,
+            x_1,
+            y_1,
+            sel_x_0,
+            sel_y_0,
+            sel_x_1,
+            sel_y_1,
+            min_v,
+            max_v,
+            us: elapsed,
+            pressed: keypress.is_some(),
+        }) {
             warn!("Failed to send coordinates");
         }
 

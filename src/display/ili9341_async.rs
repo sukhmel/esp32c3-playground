@@ -1,66 +1,56 @@
 extern crate alloc;
 
+use crate::display::{debug_input, DisplayTarget};
+use crate::inter_task::{CoordinatesReceiver, MessageReceiver};
 use alloc::vec;
-use alloc::vec::Vec;
-
-use crate::inter_task::MessageReceiver;
 use ariel_os::time::Timer;
 use ariel_os_hal::gpio::Output;
-use embedded_graphics::Drawable;
+use embassy_embedded_hal::shared_bus::asynch::spi::SpiDevice;
+use embassy_sync::blocking_mutex::raw::NoopRawMutex;
+use embassy_sync::mutex::Mutex;
 use embedded_graphics::geometry::Point;
-use embedded_graphics::mono_font::MonoTextStyle;
 use embedded_graphics::mono_font::ascii::FONT_10X20;
+use embedded_graphics::mono_font::MonoTextStyle;
 use embedded_graphics::pixelcolor::Rgb565;
 use embedded_graphics::prelude::*;
 use embedded_graphics::text::Text;
-use embedded_hal_bus::spi::ExclusiveDevice;
-use esp_hal::Async;
+use embedded_graphics::Drawable;
 use esp_hal::delay::Delay;
-use esp_hal::spi::master::{Config, Spi};
-use esp_hal::time::Rate;
-use sky_ili9341::{AsyncBuilder, AsyncDisplay, AsyncSpiInterface, Orientation};
+use esp_hal::spi::master::Spi;
+use esp_hal::Async;
+use sky_ili9341::{AsyncBuilder, AsyncDisplay, AsyncSpiInterface, ColorOrder, Orientation};
 
-type Ili9341Display<'d> =
-    AsyncDisplay<AsyncSpiInterface<ExclusiveDevice<Spi<'d, Async>, Output, DelayAsync>, Output>>;
+type Ili9341Display<'a, 'd> =
+    AsyncDisplay<AsyncSpiInterface<SpiDevice<'a, NoopRawMutex, Spi<'d, Async>, Output>, Output>>;
 
-struct DelayAsync {}
-
-impl embedded_hal_async::delay::DelayNs for DelayAsync {
-    async fn delay_ns(&mut self, ns: u32) {
-        Timer::after_nanos(ns as u64).await
-    }
-
-    async fn delay_us(&mut self, us: u32) {
-        Timer::after_micros(us as u64).await
-    }
-
-    async fn delay_ms(&mut self, ms: u32) {
-        Timer::after_millis(ms as u64).await
-    }
+pub struct Display<'a, 'd> {
+    display: Ili9341Display<'a, 'd>,
 }
 
-pub struct Display<'d> {
-    display: Ili9341Display<'d>,
-}
-
-impl<'d> Display<'d> {
+impl<'a, 'd> Display<'a, 'd> {
     pub(crate) async fn new(
-        raw_spi: Spi<'d, Async>,
+        raw_spi: &'a Mutex<NoopRawMutex, Spi<'d, Async>>,
         cs_pin: Output,
         dc_pin: Output,
         mut rst_pin: Output,
     ) -> Self {
-        let spi = ExclusiveDevice::new(raw_spi, cs_pin, DelayAsync {}).unwrap();
+        let spi = SpiDevice::new(raw_spi, cs_pin);
         let di = AsyncSpiInterface::new(spi, dc_pin);
         let mut delay = Delay::new();
         let display = AsyncBuilder::new(di)
             .orientation(Orientation::LandscapeFlipped)
+            .color_order(ColorOrder::Bgr)
             .init(&mut rst_pin, &mut delay)
             .await
             .expect("Display initialization failed");
         Self { display }
     }
 
+    pub async fn debug_input(&mut self, channel: CoordinatesReceiver, address: MessageReceiver) {
+        debug_input(self, channel, address).await
+    }
+
+    #[allow(dead_code)]
     pub async fn control_display(&mut self, _channel: MessageReceiver) {
         self.display.clear_screen(0x0f00).await.unwrap();
 
@@ -130,5 +120,36 @@ impl<'a> DrawTarget for DrawBuffer<'a> {
 impl<'a> OriginDimensions for DrawBuffer<'a> {
     fn size(&self) -> Size {
         Size::new(320, 240)
+    }
+}
+
+impl DisplayTarget for Display<'_, '_> {
+    async fn clear(&mut self, color: Rgb565) -> Result<(), ()> {
+        self.display
+            .clear_screen(color.into_storage())
+            .await
+            .map_err(|_| ())
+    }
+
+    async fn draw(
+        &mut self,
+        origin: Point,
+        size: Size,
+        pixels: impl IntoIterator<Item = Rgb565>,
+    ) -> Result<(), ()> {
+        let pixel_data = pixels
+            .into_iter()
+            .map(|c| c.into_storage())
+            .take(size.width as usize * size.height as usize);
+        self.display
+            .write_pixels(
+                origin.x as u16,
+                origin.y as u16,
+                origin.x as u16 + size.width as u16 - 1,
+                origin.y as u16 + size.height as u16 - 1,
+                pixel_data,
+            )
+            .await
+            .map_err(|_| ())
     }
 }

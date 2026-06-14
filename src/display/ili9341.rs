@@ -2,17 +2,21 @@
 //! tasks are blocked. Maybe I need to switch to an async display implementation to check if that
 //! one does really transfer data while not blocking other tasks.
 
-use crate::display::{debug_input, print_text};
+use crate::display::{DisplayTarget, debug_input, print_text};
 use crate::inter_task::{CoordinatesReceiver, MessageReceiver};
 use ariel_os_hal::gpio::Output;
 use core::cell::RefCell;
+use embedded_graphics::draw_target::DrawTarget;
+use embedded_graphics::geometry::{Point, Size};
+use embedded_graphics::pixelcolor::Rgb565;
+use embedded_graphics::primitives::Rectangle;
 use embedded_hal_bus::spi::RefCellDevice;
+use esp_hal::Blocking;
 use esp_hal::delay::Delay;
 use esp_hal::spi::master::Spi;
-use esp_hal::Blocking;
 use mipidsi::interface::SpiInterface;
 use mipidsi::options::{ColorOrder, Rotation};
-use mipidsi::{models::ILI9341Rgb565, options::Orientation, Builder, Display as DisplayImpl};
+use mipidsi::{Builder, Display as DisplayImpl, models::ILI9341Rgb565, options::Orientation};
 
 type DisplayAlias<'a, 'd, 's> = DisplayImpl<
     SpiInterface<'a, RefCellDevice<'s, Spi<'d, Blocking>, Output, Delay>, Output>,
@@ -50,6 +54,23 @@ impl<'a, 'd, 's> Display<'a, 'd, 's> {
     }
 
     pub async fn debug_input(&mut self, channel: CoordinatesReceiver, address: MessageReceiver) {
-        debug_input(&mut self.display, channel, address).await
+        debug_input(self, channel, address).await
+    }
+}
+
+impl DisplayTarget for Display<'_, '_, '_> {
+    async fn clear(&mut self, color: Rgb565) -> Result<(), ()> {
+        self.display.clear(color).map_err(|_| ())
+    }
+
+    async fn draw(
+        &mut self,
+        origin: Point,
+        size: Size,
+        pixels: impl IntoIterator<Item = Rgb565>,
+    ) -> Result<(), ()> {
+        self.display
+            .fill_contiguous(&Rectangle::new(origin, size), pixels)
+            .map_err(|_| ())
     }
 }

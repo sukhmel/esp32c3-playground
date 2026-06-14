@@ -121,7 +121,7 @@ dependencies = [
  "critical-section",
  "embassy-executor",
  "embassy-futures",
- "embassy-hal-internal",
+ "embassy-hal-internal 0.3.0",
  "embassy-net",
  "embassy-nrf",
  "embassy-stm32",
@@ -191,7 +191,7 @@ dependencies = [
  "cfg-if",
  "const_panic",
  "embassy-executor",
- "embassy-hal-internal",
+ "embassy-hal-internal 0.3.0",
  "embassy-usb 0.5.1",
  "embedded-hal 1.0.0",
  "embedded-hal-async",
@@ -777,9 +777,26 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "554e3e840696f54b4c9afcf28a0f24da431c927f4151040020416e7393d6d0d8"
 dependencies = [
  "embassy-futures",
- "embassy-hal-internal",
+ "embassy-hal-internal 0.3.0",
  "embassy-sync 0.7.2",
  "embassy-time",
+ "embedded-hal 0.2.7",
+ "embedded-hal 1.0.0",
+ "embedded-hal-async",
+ "embedded-storage",
+ "embedded-storage-async",
+ "nb 1.1.0",
+]
+
+[[package]]
+name = "embassy-embedded-hal"
+version = "0.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b0641612053b2f34fc250bb63f6630ae75de46e02ade7f457268447081d709ce"
+dependencies = [
+ "embassy-futures",
+ "embassy-hal-internal 0.4.0",
+ "embassy-sync 0.8.0",
  "embedded-hal 0.2.7",
  "embedded-hal 1.0.0",
  "embedded-hal-async",
@@ -832,6 +849,15 @@ source = "git+https://github.com/ariel-os/embassy?rev=0feffeb3c90748112a64c6570a
 dependencies = [
  "cortex-m",
  "critical-section",
+ "num-traits",
+]
+
+[[package]]
+name = "embassy-hal-internal"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7f10ce10a4dfdf6402d8e9bd63128986b96a736b1a0a6680547ed2ac55d55dba"
+dependencies = [
  "num-traits",
 ]
 
@@ -902,8 +928,8 @@ dependencies = [
  "cortex-m-rt",
  "critical-section",
  "document-features",
- "embassy-embedded-hal",
- "embassy-hal-internal",
+ "embassy-embedded-hal 0.5.0",
+ "embassy-hal-internal 0.3.0",
  "embassy-sync 0.7.2",
  "embassy-time",
  "embassy-time-driver",
@@ -934,9 +960,9 @@ dependencies = [
  "cortex-m-rt",
  "critical-section",
  "document-features",
- "embassy-embedded-hal",
+ "embassy-embedded-hal 0.5.0",
  "embassy-futures",
- "embassy-hal-internal",
+ "embassy-hal-internal 0.3.0",
  "embassy-sync 0.7.2",
  "embassy-time",
  "embassy-time-driver",
@@ -977,9 +1003,9 @@ dependencies = [
  "cortex-m-rt",
  "critical-section",
  "document-features",
- "embassy-embedded-hal",
+ "embassy-embedded-hal 0.5.0",
  "embassy-futures",
- "embassy-hal-internal",
+ "embassy-hal-internal 0.3.0",
  "embassy-net-driver",
  "embassy-sync 0.7.2",
  "embassy-time",
@@ -1421,7 +1447,7 @@ dependencies = [
  "delegate",
  "digest",
  "document-features",
- "embassy-embedded-hal",
+ "embassy-embedded-hal 0.5.0",
  "embassy-futures",
  "embassy-sync 0.7.2",
  "embassy-usb-driver",
@@ -1677,6 +1703,7 @@ version = "0.1.0"
 dependencies = [
  "ariel-os",
  "ariel-os-hal",
+ "embassy-embedded-hal 0.6.0",
  "embassy-futures",
  "embassy-sync 0.8.0",
  "embassy-usb 0.6.0",

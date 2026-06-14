@@ -8,10 +8,13 @@ pub type MessageReceiver =
     Receiver<'static, CriticalSectionRawMutex, heapless::String<MESSAGE_SIZE>, CHANNEL_SIZE>;
 pub type SoundChannelType = Channel<CriticalSectionRawMutex, Option<Melody>, CHANNEL_SIZE>;
 pub type SoundReceiver = Receiver<'static, CriticalSectionRawMutex, Option<Melody>, CHANNEL_SIZE>;
-pub type CoordinatesChannelType = Channel<CriticalSectionRawMutex, Reading, CHANNEL_SIZE>;
-pub type CoordinatesReceiver = Receiver<'static, CriticalSectionRawMutex, Reading, CHANNEL_SIZE>;
+pub type CoordinatesChannelType =
+    Channel<CriticalSectionRawMutex, Reading, COORDINATES_CHANNEL_SIZE>;
+pub type CoordinatesReceiver =
+    Receiver<'static, CriticalSectionRawMutex, Reading, COORDINATES_CHANNEL_SIZE>;
 pub const MESSAGE_SIZE: usize = 512;
-pub const CHANNEL_SIZE: usize = 10;
+pub const CHANNEL_SIZE: usize = 2;
+pub const COORDINATES_CHANNEL_SIZE: usize = 10;
 pub static MESSAGE_CHANNEL: MessageChannelType = Channel::new();
 pub static SOUND_CHANNEL: SoundChannelType = Channel::new();
 pub static COORDINATES_CHANNEL: CoordinatesChannelType = Channel::new();
