@@ -4,6 +4,7 @@ extern crate alloc;
 
 include!(concat!(env!("OUT_DIR"), "/secrets.rs"));
 
+use core::cell::RefCell;
 use crate::buzzer::{Melody, SoundLed};
 use crate::inter_task::{
     CHAR_CHANNEL, COORDINATES_CHANNEL, MESSAGE_CHANNEL, MESSAGE_SIZE, SOUND_CHANNEL,
@@ -19,6 +20,8 @@ use display::ili9341::Display;
 #[cfg(feature = "async_ili9341")]
 use display::ili9341_async::Display;
 use embassy_futures::join::join3;
+use embedded_hal_bus::spi::RefCellDevice;
+use esp_hal::delay::Delay;
 use esp_hal::gpio::OutputPin;
 use esp_hal::ledc::Ledc;
 use esp_hal::rmt::Rmt;
@@ -47,21 +50,25 @@ fn panic(info: &core::panic::PanicInfo) -> ! {
 #[ariel_os::task(autostart, peripherals)]
 async fn ui(peripherals: Peripherals) {
     info!("Starting UI");
-    let raw_spi = Spi::new(
+    let raw_spi = RefCell::new(Spi::new(
         peripherals.binary.spi,
-        Config::default().with_frequency(Rate::from_mhz(60)),
+        Config::default().with_frequency(Rate::from_mhz(2)),
     )
     .unwrap()
-    .with_miso(peripherals.binary.pin20)
+    .with_miso(peripherals.binary.pin5)
     .with_mosi(peripherals.binary.pin7)
-    .with_sck(peripherals.binary.pin6);
-    let cs_pin = Output::new(peripherals.binary.pin10, Level::Low);
+    .with_sck(peripherals.binary.pin6)
+    );
+    let cs_pin = Output::new(peripherals.binary.pin10, Level::High);
     let dc_pin = Output::new(peripherals.binary.pin9, Level::Low);
     let rst_pin = Output::new(peripherals.binary.pin18, Level::Low);
     #[cfg(not(feature = "async_ili9341"))]
     let mut buffer = [0u8; 512];
     #[cfg(not(feature = "async_ili9341"))]
-    let mut display = Display::new(raw_spi, cs_pin, dc_pin, rst_pin, &mut buffer);
+    let mut display = Display::new(&raw_spi, cs_pin, dc_pin, rst_pin, &mut buffer);
+    let touch_cs_pin = Output::new(peripherals.binary.pin4, Level::High);
+    let touch_spi = RefCellDevice::new(&raw_spi, touch_cs_pin, Delay::new()).unwrap();
+
     #[cfg(feature = "async_ili9341")]
     let mut display = Display::new(raw_spi.into_async(), cs_pin, dc_pin, rst_pin).await;
     let ledc = Ledc::new(peripherals.binary.ledc);

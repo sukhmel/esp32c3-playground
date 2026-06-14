@@ -1,8 +1,13 @@
+//! When the display clock is slow, drawing takes a lot of time and happens synchronously, so other
+//! tasks are blocked. Maybe I need to switch to an async display implementation to check if that
+//! one does really transfer data while not blocking other tasks.
+
+use core::cell::RefCell;
 use crate::input::{CHARSETS, value_to_percent};
-use crate::inter_task::{CoordinatesReceiver, MESSAGE_SIZE, MessageReceiver};
+use crate::inter_task::{CoordinatesReceiver, MESSAGE_SIZE, MessageReceiver, Reading};
 use crate::rainbow::{RAINBOW_RGB565_128, RAINBOW_RGB565_256, rgb565_rainbow};
 use ariel_os::debug::log::{info, warn};
-use ariel_os::time::{Instant, Timer};
+use ariel_os::time::{Duration, Instant, Timer};
 use ariel_os_hal::gpio::Output;
 use core::fmt::Debug;
 use embassy_futures::select::{Either, select};
@@ -21,7 +26,7 @@ use embedded_graphics::{
     text::Text,
 };
 use embedded_graphics_framebuf::FrameBuf;
-use embedded_hal_bus::spi::ExclusiveDevice;
+use embedded_hal_bus::spi::{RefCellDevice};
 use esp_hal::Blocking;
 use esp_hal::delay::Delay;
 use esp_hal::spi::master::Spi;
@@ -62,25 +67,25 @@ macro_rules! pos_to_y {
     ($value: expr) => {{ BAND_HEIGHT - 1 - ($value * (BAND_HEIGHT - 1) as f32) as i32 }};
 }
 
-type DisplayAlias<'a, 'd> = DisplayImpl<
-    SpiInterface<'a, ExclusiveDevice<Spi<'d, Blocking>, Output, Delay>, Output>,
+type DisplayAlias<'a, 'd, 's> = DisplayImpl<
+    SpiInterface<'a, RefCellDevice<'s, Spi<'d, Blocking>, Output, Delay>, Output>,
     ILI9341Rgb565,
     Output,
 >;
 
-pub struct Display<'a, 'd> {
-    display: DisplayAlias<'a, 'd>,
+pub struct Display<'a, 'd, 's> {
+    display: DisplayAlias<'a, 'd, 's>,
 }
 
-impl<'a, 'd> Display<'a, 'd> {
+impl<'a, 'd, 's> Display<'a, 'd, 's> {
     pub fn new(
-        raw_spi: Spi<'d, Blocking>,
+        raw_spi: &'s RefCell<Spi<'d, Blocking>>,
         cs_pin: Output,
         dc_pin: Output,
         rst_pin: Output,
         buffer: &'a mut [u8; 512],
     ) -> Self {
-        let spi = ExclusiveDevice::new(raw_spi, cs_pin, Delay::new()).unwrap();
+        let spi = RefCellDevice::new(raw_spi, cs_pin, Delay::new()).unwrap();
         let di = SpiInterface::new(spi, dc_pin, buffer.as_mut_slice());
         let mut delay = Delay::new();
         let display = Builder::new(ILI9341Rgb565, di)
@@ -135,45 +140,56 @@ impl<'a, 'd> Display<'a, 'd> {
         let mut time = None;
         let mut min_v = u16::MAX;
         let mut max_v = u16::MIN;
+        let mut x_0 = 0.0;
+        let mut y_0 = 0.0;
+        let mut x_1 = 0.0;
+        let mut y_1 = 0.0;
+        let mut current_coordinates = Reading::default();
+        let mut current_select = 4;
         loop {
-            let coordinates = channel.receive().await;
             let start = Instant::now();
-            let x0 = coordinates.x_0;
-            let y0 = coordinates.y_0;
-            let x1 = coordinates.x_1;
-            let y1 = coordinates.y_1;
+            let mut loaded = 0;
+            while let Ok(coordinates) = channel.try_receive() {
+                loaded += 1;
+                let x0 = coordinates.x_0;
+                let y0 = coordinates.y_0;
+                let x1 = coordinates.x_1;
+                let y1 = coordinates.y_1;
+                current_coordinates = coordinates;
 
-            redraw_and_fill(
-                &mut frame_buffer,
-                INPUT_COLORS[0],
-                pos_to_y!(x0),
-                &mut buffer_x0,
-            );
-            redraw_and_fill(
-                &mut frame_buffer,
-                INPUT_COLORS[1],
-                pos_to_y!(y0),
-                &mut buffer_y0,
-            );
+                buffer_x0.push_back(pos_to_y!(x0)).unwrap();
+                if buffer_x0.len() > 320 {
+                    buffer_x0.pop_front();
+                }
+                buffer_y0.push_back(pos_to_y!(y0)).unwrap();
+                if buffer_y0.len() > 320 {
+                    buffer_y0.pop_front();
+                }
+                buffer_x1.push_back(pos_to_y!(x1)).unwrap();
+                if buffer_x1.len() > 320 {
+                    buffer_x1.pop_front();
+                }
+                buffer_y1.push_back(pos_to_y!(y1)).unwrap();
+                if buffer_y1.len() > 320 {
+                    buffer_y1.pop_front();
+                }
+            }
+            if loaded == 0 {
+                Timer::after(Duration::from_millis(100)).await;
+                continue;
+            }
+            draw_buffer(&mut frame_buffer, &buffer_x0, INPUT_COLORS[0]);
+            // draw_buffer(&mut frame_buffer, &buffer_y0, INPUT_COLORS[1]);
             self.display
-                .fill_contiguous(
-                    &Rectangle::new(Point::new(0, BAND_HEIGHT + 1), frame_buffer.size()),
-                    frame_buffer.data.iter().copied(),
-                )
-                .unwrap();
+                    .fill_contiguous(
+                        &Rectangle::new(Point::new(0, BAND_HEIGHT + 1), frame_buffer.size()),
+                        frame_buffer.data.iter().copied(),
+                    )
+                    .unwrap();
             frame_buffer.clear(Rgb565::RED).unwrap();
-            redraw_and_fill(
-                &mut frame_buffer,
-                INPUT_COLORS[2],
-                pos_to_y!(x1),
-                &mut buffer_x1,
-            );
-            redraw_and_fill(
-                &mut frame_buffer,
-                INPUT_COLORS[3],
-                pos_to_y!(y1),
-                &mut buffer_y1,
-            );
+
+            draw_buffer(&mut frame_buffer, &buffer_x1, INPUT_COLORS[2]);
+            draw_buffer(&mut frame_buffer, &buffer_y1, INPUT_COLORS[3]);
             self.display
                 .fill_contiguous(
                     &Rectangle::new(Point::new(0, 0), frame_buffer.size()),
@@ -181,9 +197,10 @@ impl<'a, 'd> Display<'a, 'd> {
                 )
                 .unwrap();
             frame_buffer.clear(Rgb565::RED).unwrap();
-            if min_v != coordinates.min_v || max_v != coordinates.max_v {
-                min_v = coordinates.min_v;
-                max_v = coordinates.max_v;
+
+            if min_v != current_coordinates.min_v || max_v != current_coordinates.max_v {
+                min_v = current_coordinates.min_v;
+                max_v = current_coordinates.max_v;
                 draw_min_max(
                     &mut self.display,
                     'V',
@@ -193,47 +210,56 @@ impl<'a, 'd> Display<'a, 'd> {
                 );
             }
 
-            let select = coordinates.sel_x_1 + coordinates.sel_y_1 * 3;
+            let select = current_coordinates.sel_x_1 + current_coordinates.sel_y_1 * 3;
             let charset = CHARSETS[select as usize];
-            draw_position(
-                &mut position_frame_buffer,
-                x0,
-                y0,
-                coordinates.sel_x_0,
-                coordinates.sel_y_0,
-                coordinates.pressed,
-                charset,
-            );
-            self.display
-                .fill_contiguous(
-                    &Rectangle::new(
-                        Point::new((POSITION_PAD_DIAMETER + 10) as i32, (BAND_HEIGHT + 1) * 4),
-                        position_frame_buffer.size(),
-                    ),
-                    position_frame_buffer.data.iter().copied(),
-                )
-                .unwrap();
-            position_frame_buffer.clear(Rgb565::RED).unwrap();
+            if f32::abs(x_0 - current_coordinates.x_0) > 0.01 || f32::abs(y_0 - current_coordinates.y_0) > 0.01 || current_select != select {
+                x_0 = current_coordinates.x_0;
+                y_0 = current_coordinates.y_0;
+                current_select = select;
+                draw_position(
+                    &mut position_frame_buffer,
+                    current_coordinates.x_0,
+                    current_coordinates.y_0,
+                    current_coordinates.sel_x_0,
+                    current_coordinates.sel_y_0,
+                    current_coordinates.pressed,
+                    charset,
+                );
+                self.display
+                    .fill_contiguous(
+                        &Rectangle::new(
+                            Point::new((POSITION_PAD_DIAMETER + 10) as i32, (BAND_HEIGHT + 1) * 4),
+                            position_frame_buffer.size(),
+                        ),
+                        position_frame_buffer.data.iter().copied(),
+                    )
+                    .unwrap();
+                position_frame_buffer.clear(Rgb565::RED).unwrap();
+            }
+            if f32::abs(x_1 - current_coordinates.x_1) > 0.01 || f32::abs(y_1 - current_coordinates.y_1) > 0.01 {
+                x_1 = current_coordinates.x_1;
+                y_1 = current_coordinates.y_1;
 
-            draw_position(
-                &mut position_frame_buffer,
-                x1,
-                y1,
-                coordinates.sel_x_1,
-                coordinates.sel_y_1,
-                false,
-                "",
-            );
-            self.display
-                .fill_contiguous(
-                    &Rectangle::new(
-                        Point::new(0, (BAND_HEIGHT + 1) * 4),
-                        position_frame_buffer.size(),
-                    ),
-                    position_frame_buffer.data.iter().copied(),
-                )
-                .unwrap();
-            position_frame_buffer.clear(Rgb565::CSS_ORANGE_RED).unwrap();
+                draw_position(
+                    &mut position_frame_buffer,
+                    current_coordinates.x_1,
+                    current_coordinates.y_1,
+                    current_coordinates.sel_x_1,
+                    current_coordinates.sel_y_1,
+                    false,
+                    "",
+                );
+                self.display
+                    .fill_contiguous(
+                        &Rectangle::new(
+                            Point::new(0, (BAND_HEIGHT + 1) * 4),
+                            position_frame_buffer.size(),
+                        ),
+                        position_frame_buffer.data.iter().copied(),
+                    )
+                    .unwrap();
+                position_frame_buffer.clear(Rgb565::CSS_ORANGE_RED).unwrap();
+            }
 
             fill_and_draw_time(&mut frame_buffer, time, &mut buffer_time);
             self.display
@@ -251,6 +277,7 @@ impl<'a, 'd> Display<'a, 'd> {
                 message = Some(value);
             }
             time = Some(start.elapsed().as_millis());
+            Timer::after(Duration::from_millis(10)).await;
         }
     }
 }
@@ -385,7 +412,7 @@ fn draw_axis_min_max<T: DrawTarget<Color = Rgb565>, M: core::fmt::Display>(
 }
 
 fn draw_min_max<T: core::fmt::Display>(
-    display: &mut DisplayAlias<'_, '_>,
+    display: &mut DisplayAlias<'_, '_, '_>,
     prefix: char,
     min: T,
     max: T,
@@ -400,7 +427,7 @@ fn draw_min_max<T: core::fmt::Display>(
 }
 
 fn draw_text(
-    display: &mut DisplayAlias<'_, '_>,
+    display: &mut DisplayAlias<'_, '_, '_>,
     value: &heapless::String<22>,
     band: i32,
 ) {
@@ -472,7 +499,7 @@ fn draw_buffer<T: DrawTarget<Color = Rgb565>>(
 /// ```
 #[allow(dead_code)]
 fn fill_and_draw_time_with_decay(
-    display: &mut DisplayAlias<'_, '_>,
+    display: &mut DisplayAlias<'_, '_, '_>,
     start: Instant,
     buffer_time: &mut Deque<i32, 350>,
     time: &mut Option<f32>,
@@ -550,7 +577,7 @@ where
 }
 
 async fn rainbow_text(
-    display: &mut DisplayAlias<'_, '_>,
+    display: &mut DisplayAlias<'_, '_, '_>,
     text: &Option<heapless::String<MESSAGE_SIZE>>,
 ) {
     let Some(text) = text else {
@@ -620,7 +647,7 @@ async fn rainbow_text(
 }
 
 #[allow(dead_code)]
-pub async fn test_display(display: &mut DisplayAlias<'_, '_>) {
+pub async fn test_display(display: &mut DisplayAlias<'_, '_,'_>) {
     display.clear(Rgb565::RED).unwrap();
 
     Timer::after_secs(1).await;

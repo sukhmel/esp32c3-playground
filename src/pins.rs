@@ -8,6 +8,8 @@ ariel_os::hal::define_peripherals!(BinaryPeripherals {
     ledc: LEDC,
     rmt: RMT,
     spi: SPI2,
+    pin4: GPIO4,
+    pin5: GPIO5,
     pin6: GPIO6,
     pin7: GPIO7,
     /// Needs to be disconnected from ground on boot
@@ -28,6 +30,4 @@ ariel_os::hal::define_peripherals!(AnalogPeripherals {
     pin1: GPIO1,
     pin2: GPIO2,
     pin3: GPIO3,
-    pin4: GPIO4,
-    pin5: GPIO5,
 });

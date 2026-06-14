@@ -137,8 +137,8 @@ pub async fn read_joystick(peripherals: AnalogPeripherals) {
             keypress_cycle = 0;
         }
 
-        COORDINATES_CHANNEL
-            .send(Reading {
+        if let Err(_) = COORDINATES_CHANNEL
+            .try_send(Reading {
                 v_x_0: x_0_value,
                 v_y_0: y_0_value,
                 v_x_1: x_1_value,
@@ -155,8 +155,9 @@ pub async fn read_joystick(peripherals: AnalogPeripherals) {
                 max_v,
                 us: elapsed,
                 pressed: keypress.is_some(),
-            })
-            .await;
+            }) {
+            warn!("Failed to send coordinates");
+        }
 
         Timer::after_millis(100).await;
     }
