@@ -4,9 +4,12 @@ extern crate alloc;
 
 include!(concat!(env!("OUT_DIR"), "/secrets.rs"));
 
-use crate::buzzer::{buzz, Melody, SoundLed};
-use crate::inter_task::{CHAR_CHANNEL, COORDINATES_CHANNEL, MESSAGE_CHANNEL, MESSAGE_SIZE, SOUND_CHANNEL, TOUCH_CHANNEL};
+use crate::buzzer::{Melody, SoundLed, buzz};
+use crate::inter_task::{
+    CHAR_CHANNEL, COORDINATES_CHANNEL, MESSAGE_CHANNEL, MESSAGE_SIZE, SOUND_CHANNEL, TOUCH_CHANNEL,
+};
 use crate::pins::Peripherals;
+use crate::touch::Xpt2046TouchInput;
 use ariel_os::asynch::Spawner;
 use ariel_os::debug::log::{debug, error, info, warn};
 use ariel_os::reexports::embassy_net::{IpListenEndpoint, Stack, tcp::TcpSocket};
@@ -22,11 +25,10 @@ use embassy_sync::blocking_mutex::raw::NoopRawMutex;
 use embedded_hal_bus::spi::RefCellDevice;
 #[cfg(not(feature = "async_ili9341"))]
 use esp_hal::delay::Delay;
-use esp_hal::gpio::{OutputPin};
+use esp_hal::gpio::OutputPin;
 use esp_hal::ledc::Ledc;
 use esp_hal::spi::master::{Config, Spi};
 use esp_hal::time::Rate;
-use crate::touch::Xpt2046TouchInput;
 
 mod buzzer;
 mod display;
@@ -74,14 +76,24 @@ async fn ui(peripherals: Peripherals) {
     let mut display = Display::new(&shared_spi, cs_pin, dc_pin, rst_pin, &mut buffer);
     #[cfg(not(feature = "async_ili9341"))]
     let touch_spi = RefCellDevice::new(&shared_spi, touch_cs_pin, Delay::new()).unwrap();
-    let mut touch = Xpt2046TouchInput::create(&shared_spi, peripherals.binary.pin4, peripherals.binary.pin8, 320).unwrap();
+    let mut touch = Xpt2046TouchInput::create(
+        &shared_spi,
+        peripherals.binary.pin4,
+        peripherals.binary.pin8,
+        320,
+    )
+    .unwrap();
     #[cfg(feature = "async_ili9341")]
     let mut display = Display::new(&shared_spi, cs_pin, dc_pin, rst_pin).await;
     let ledc = Ledc::new(peripherals.binary.ledc);
     // let rmt = Rmt::new(peripherals.binary.rmt, Rate::from_mhz(80)).unwrap();
     // let buzzer = SoundLed::new(peripherals.binary.pin19, ledc, peripherals.binary.pin8, rmt);
     join4(
-        display.debug_input(COORDINATES_CHANNEL.receiver(), MESSAGE_CHANNEL.receiver(), TOUCH_CHANNEL.receiver()),
+        display.debug_input(
+            COORDINATES_CHANNEL.receiver(),
+            MESSAGE_CHANNEL.receiver(),
+            TOUCH_CHANNEL.receiver(),
+        ),
         buzz(peripherals.binary.pin19, ledc, SOUND_CHANNEL.receiver()),
         input::read_joystick(peripherals.analog),
         touch.run(),

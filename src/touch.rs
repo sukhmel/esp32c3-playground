@@ -1,15 +1,20 @@
 //! Based on <https://github.com/lampaBiurkowa/esp32-ili9341-slint/blob/master/src/touch_input.rs>
 
+use crate::inter_task::TOUCH_CHANNEL;
 use ariel_os::debug::log::warn;
 use ariel_os::time::{Duration, Timer};
 use embassy_embedded_hal::shared_bus::asynch::spi::SpiDeviceWithConfig;
 use embassy_sync::blocking_mutex::raw::NoopRawMutex;
 use embassy_sync::mutex::Mutex;
 use embedded_graphics::geometry::Point;
-use esp_hal::{Blocking, delay::Delay, gpio::{Input, InputPin, Level, Output, OutputPin}, spi::master::{Spi, Config}, Async};
 use esp_hal::time::Rate;
+use esp_hal::{
+    Async, Blocking,
+    delay::Delay,
+    gpio::{Input, InputPin, Level, Output, OutputPin},
+    spi::master::{Config, Spi},
+};
 use xpt2046_async::Xpt2046;
-use crate::inter_task::TOUCH_CHANNEL;
 
 #[derive(Debug)]
 pub(crate) enum TouchInputError {
@@ -44,7 +49,11 @@ impl<'a> Xpt2046TouchInput<'a> {
     ) -> Result<Self, TouchInputError> {
         let touch_irq_pin = Input::new(irq_pin, Default::default());
         let touch_cs = Output::new(touch_cs_pin, Level::High, Default::default());
-        let touch_spi_dev = SpiDeviceWithConfig::new(spi, touch_cs, Config::default().with_frequency(Rate::from_mhz(5)));
+        let touch_spi_dev = SpiDeviceWithConfig::new(
+            spi,
+            touch_cs,
+            Config::default().with_frequency(Rate::from_mhz(5)),
+        );
         let xpt = Xpt2046::new(
             touch_spi_dev,
             touch_irq_pin,

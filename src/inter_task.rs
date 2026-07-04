@@ -1,7 +1,7 @@
 use crate::buzzer::Melody;
+use crate::touch::TouchInputResponse;
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::channel::{Channel, Receiver};
-use crate::touch::TouchInputResponse;
 
 pub type MessageChannelType =
     Channel<CriticalSectionRawMutex, heapless::String<MESSAGE_SIZE>, CHANNEL_SIZE>;
@@ -9,8 +9,7 @@ pub type MessageReceiver =
     Receiver<'static, CriticalSectionRawMutex, heapless::String<MESSAGE_SIZE>, CHANNEL_SIZE>;
 pub type SoundChannelType = Channel<CriticalSectionRawMutex, Option<Melody>, CHANNEL_SIZE>;
 pub type SoundReceiver = Receiver<'static, CriticalSectionRawMutex, Option<Melody>, CHANNEL_SIZE>;
-pub type CoordinatesChannelType =
-    Channel<CriticalSectionRawMutex, Reading, LARGE_CHANNEL_SIZE>;
+pub type CoordinatesChannelType = Channel<CriticalSectionRawMutex, Reading, LARGE_CHANNEL_SIZE>;
 pub type CoordinatesReceiver =
     Receiver<'static, CriticalSectionRawMutex, Reading, LARGE_CHANNEL_SIZE>;
 pub type TouchChannelType =

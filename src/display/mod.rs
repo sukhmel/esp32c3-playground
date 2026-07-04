@@ -6,8 +6,11 @@ pub mod ili9341;
 pub mod ili9341_async;
 
 use crate::input::{CHARSETS, value_to_percent};
-use crate::inter_task::{CoordinatesReceiver, MESSAGE_SIZE, MessageReceiver, Reading, TouchReceiver};
+use crate::inter_task::{
+    CoordinatesReceiver, MESSAGE_SIZE, MessageReceiver, Reading, TouchReceiver,
+};
 use crate::rainbow::{RAINBOW_RGB565_128, RAINBOW_RGB565_256, rgb565_rainbow};
+use crate::touch::TouchInputResponse;
 use ariel_os::debug::log::{info, warn};
 use ariel_os::time::{Duration, Instant, Timer};
 use core::fmt::Debug;
@@ -21,18 +24,19 @@ use embedded_graphics::{
     geometry::Point,
     mono_font::{
         MonoTextStyle,
-        iso_8859_5::{FONT_8X13_BOLD, FONT_8X13_ITALIC, FONT_8X13, FONT_9X18, FONT_9X18_BOLD, FONT_10X20},
+        iso_8859_5::{
+            FONT_6X10, FONT_8X13_BOLD, FONT_8X13_ITALIC, FONT_9X18, FONT_9X18_BOLD, FONT_10X20,
+        },
     },
     prelude::*,
     text::Text,
 };
 use embedded_graphics_framebuf::FrameBuf;
 use heapless::Deque;
-#[cfg(feature = "async_ili9341")]
-pub use ili9341_async::Display;
 #[cfg(not(feature = "async_ili9341"))]
 pub use ili9341::Display;
-use crate::touch::TouchInputResponse;
+#[cfg(feature = "async_ili9341")]
+pub use ili9341_async::Display;
 
 static INPUT_COLORS: [Rgb565; 4] = [
     Rgb565::BLUE,
@@ -208,7 +212,12 @@ pub async fn debug_input<T: DisplayTarget>(
 
         draw_buffer(&mut frame_buffer, &buffer_x0, INPUT_COLORS[0]);
         draw_buffer(&mut frame_buffer, &buffer_y0, INPUT_COLORS[1]);
-        draw_touch_buffer(&mut frame_buffer, &mut buffer_touch, BAND_HEIGHT, Rgb565::WHITE);
+        draw_touch_buffer(
+            &mut frame_buffer,
+            &mut buffer_touch,
+            BAND_HEIGHT,
+            Rgb565::WHITE,
+        );
         display
             .draw(
                 Point::new(0, BAND_HEIGHT + 1),
@@ -280,7 +289,12 @@ pub async fn debug_input<T: DisplayTarget>(
         }
 
         fill_and_draw_time(&mut frame_buffer, time, &mut buffer_time);
-        draw_touch_buffer(&mut frame_buffer, &mut buffer_touch, BAND_HEIGHT * 2, Rgb565::WHITE);
+        draw_touch_buffer(
+            &mut frame_buffer,
+            &mut buffer_touch,
+            BAND_HEIGHT * 2,
+            Rgb565::WHITE,
+        );
         display
             .draw(
                 Point::new(0, (BAND_HEIGHT + 1) * 2),
@@ -310,8 +324,14 @@ pub async fn debug_input<T: DisplayTarget>(
     }
 }
 
-fn draw_touch_buffer<T: DrawTarget<Color = Rgb565>>(display: &mut T, buffer_touch: &mut Deque<TouchInputResponse, 350>, shift: i32, color: Rgb565)
-where <T as DrawTarget>::Error: Debug {
+fn draw_touch_buffer<T: DrawTarget<Color = Rgb565>>(
+    display: &mut T,
+    buffer_touch: &mut Deque<TouchInputResponse, 350>,
+    shift: i32,
+    color: Rgb565,
+) where
+    <T as DrawTarget>::Error: Debug,
+{
     let mut x_0 = -1;
     let mut y_0 = -1;
     for touch in buffer_touch.iter() {
@@ -344,7 +364,7 @@ fn draw_position<T: DrawTarget<Color = Rgb565>>(
     pressed: bool,
     charset: &str,
 ) where
-    <T as DrawTarget>::Error: Debug
+    <T as DrawTarget>::Error: Debug,
 {
     let y_0 = 0;
     let diameter = POSITION_PAD_DIAMETER as i32;
@@ -357,7 +377,11 @@ fn draw_position<T: DrawTarget<Color = Rgb565>>(
     .into_styled(
         PrimitiveStyleBuilder::new()
             .stroke_width(1)
-            .fill_color(Rgb565::CSS_LIGHT_SALMON)
+            .fill_color(if charset.len() > 0 {
+                Rgb565::CSS_LIGHT_SALMON
+            } else {
+                Rgb565::CSS_ORANGE_RED
+            })
             .stroke_color(Rgb565::BLACK)
             .build(),
     )
@@ -414,8 +438,8 @@ fn draw_position<T: DrawTarget<Color = Rgb565>>(
     if charset.len() == 0 {
         for x in 0..3 {
             for y in 0..3 {
-                let x_pos = x_0 + diameter / 3 * x + 3;
-                let y_pos = y_0 + diameter / 3 * y + 11;
+                let x_pos = x_0 + diameter / 3 * x + 7;
+                let y_pos = y_0 + diameter / 3 * y + 12;
 
                 for (index, ch) in CHARSETS[(x + 3 * y) as usize].chars().enumerate() {
                     let index = if index < 4 {
@@ -430,11 +454,11 @@ fn draw_position<T: DrawTarget<Color = Rgb565>>(
                     }
                     Text::new(
                         &char,
-                        Point::new(x_pos + 12 * (index % 3), y_pos + 12 * (index / 3)),
-                        MonoTextStyle::new(&FONT_8X13, Rgb565::BLACK),
+                        Point::new(x_pos + 10 * (index % 3), y_pos + 10 * (index / 3)),
+                        MonoTextStyle::new(&FONT_6X10, Rgb565::BLACK),
                     )
-                        .draw(display)
-                        .unwrap();
+                    .draw(display)
+                    .unwrap();
                     char.clear();
                 }
             }
@@ -595,10 +619,13 @@ fn draw_buffer<T: DrawTarget<Color = Rgb565>>(
         }
     }
     if skipped {
-        Line::new(Point::new(flat_x, flat_y), Point::new(buffer.len() as i32, flat_y))
-            .into_styled(PrimitiveStyle::with_stroke(color, 1))
-            .draw(display)
-            .unwrap();
+        Line::new(
+            Point::new(flat_x, flat_y),
+            Point::new(buffer.len() as i32, flat_y),
+        )
+        .into_styled(PrimitiveStyle::with_stroke(color, 1))
+        .draw(display)
+        .unwrap();
     }
 }
 

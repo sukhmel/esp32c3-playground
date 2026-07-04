@@ -1,6 +1,6 @@
 extern crate alloc;
 
-use crate::display::{debug_input, DisplayTarget};
+use crate::display::{DisplayTarget, debug_input};
 use crate::inter_task::{CoordinatesReceiver, MessageReceiver, TouchReceiver};
 use alloc::vec;
 use ariel_os::time::Timer;
@@ -8,21 +8,22 @@ use ariel_os_hal::gpio::Output;
 use embassy_embedded_hal::shared_bus::asynch::spi::SpiDeviceWithConfig;
 use embassy_sync::blocking_mutex::raw::NoopRawMutex;
 use embassy_sync::mutex::Mutex;
+use embedded_graphics::Drawable;
 use embedded_graphics::geometry::Point;
-use embedded_graphics::mono_font::ascii::FONT_10X20;
 use embedded_graphics::mono_font::MonoTextStyle;
+use embedded_graphics::mono_font::ascii::FONT_10X20;
 use embedded_graphics::pixelcolor::Rgb565;
 use embedded_graphics::prelude::*;
 use embedded_graphics::text::Text;
-use embedded_graphics::Drawable;
-use esp_hal::delay::Delay;
-use esp_hal::spi::master::{Spi, Config};
 use esp_hal::Async;
+use esp_hal::delay::Delay;
+use esp_hal::spi::master::{Config, Spi};
 use esp_hal::time::Rate;
 use sky_ili9341::{AsyncBuilder, AsyncDisplay, AsyncSpiInterface, ColorOrder, Orientation};
 
-type Ili9341Display<'a, 'd> =
-    AsyncDisplay<AsyncSpiInterface<SpiDeviceWithConfig<'a, NoopRawMutex, Spi<'d, Async>, Output>, Output>>;
+type Ili9341Display<'a, 'd> = AsyncDisplay<
+    AsyncSpiInterface<SpiDeviceWithConfig<'a, NoopRawMutex, Spi<'d, Async>, Output>, Output>,
+>;
 
 pub struct Display<'a, 'd> {
     display: Ili9341Display<'a, 'd>,
@@ -35,7 +36,11 @@ impl<'a, 'd> Display<'a, 'd> {
         dc_pin: Output,
         mut rst_pin: Output,
     ) -> Self {
-        let spi = SpiDeviceWithConfig::new(raw_spi, cs_pin, Config::default().with_frequency(Rate::from_mhz(60)));
+        let spi = SpiDeviceWithConfig::new(
+            raw_spi,
+            cs_pin,
+            Config::default().with_frequency(Rate::from_mhz(60)),
+        );
         let di = AsyncSpiInterface::new(spi, dc_pin);
         let mut delay = Delay::new();
         let display = AsyncBuilder::new(di)
@@ -47,7 +52,12 @@ impl<'a, 'd> Display<'a, 'd> {
         Self { display }
     }
 
-    pub async fn debug_input(&mut self, channel: CoordinatesReceiver, address: MessageReceiver, touch: TouchReceiver) {
+    pub async fn debug_input(
+        &mut self,
+        channel: CoordinatesReceiver,
+        address: MessageReceiver,
+        touch: TouchReceiver,
+    ) {
         debug_input(self, channel, address, touch).await
     }
 
