@@ -31,3 +31,10 @@ ariel_os::hal::define_peripherals!(AnalogPeripherals {
     pin2: GPIO2,
     pin3: GPIO3,
 });
+ariel_os::hal::define_peripherals!(SystemPeripherals {
+    system: SYSTEM,
+    sys_timer: SYSTIMER,
+    rng: RNG,
+    timer_group0: TIMG0,
+    bt: BT,
+});

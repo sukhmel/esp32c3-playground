@@ -16,14 +16,20 @@ pub type TouchChannelType =
     Channel<CriticalSectionRawMutex, TouchInputResponse, LARGE_CHANNEL_SIZE>;
 pub type TouchReceiver =
     Receiver<'static, CriticalSectionRawMutex, TouchInputResponse, LARGE_CHANNEL_SIZE>;
+pub type CharChannelType = Channel<CriticalSectionRawMutex, char, CHANNEL_SIZE>;
+pub type CharReceiver = Receiver<'static, CriticalSectionRawMutex, char, CHANNEL_SIZE>;
+pub type KeypressChannelType = Channel<CriticalSectionRawMutex, Keypress, LARGE_CHANNEL_SIZE>;
+pub type KeypressReceiver =
+    Receiver<'static, CriticalSectionRawMutex, Keypress, LARGE_CHANNEL_SIZE>;
 
-pub const MESSAGE_SIZE: usize = 512;
+pub const MESSAGE_SIZE: usize = 128;
 pub const CHANNEL_SIZE: usize = 2;
 pub const LARGE_CHANNEL_SIZE: usize = 10;
 pub static MESSAGE_CHANNEL: MessageChannelType = Channel::new();
 pub static SOUND_CHANNEL: SoundChannelType = Channel::new();
 pub static COORDINATES_CHANNEL: CoordinatesChannelType = Channel::new();
-pub static CHAR_CHANNEL: Channel<CriticalSectionRawMutex, char, CHANNEL_SIZE> = Channel::new();
+pub static CHAR_CHANNEL: CharChannelType = Channel::new();
+pub static KEYPRESS_CHANNEL: KeypressChannelType = Channel::new();
 pub static TOUCH_CHANNEL: TouchChannelType = Channel::new();
 
 #[derive(Debug)]
@@ -67,4 +73,10 @@ impl Default for Reading {
             pressed: false,
         }
     }
+}
+
+#[derive(Debug, Copy, Clone)]
+pub enum Keypress {
+    Pressed(char),
+    Released(char),
 }

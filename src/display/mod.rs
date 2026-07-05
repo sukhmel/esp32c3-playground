@@ -14,6 +14,7 @@ use crate::touch::TouchInputResponse;
 use ariel_os::debug::log::{info, warn};
 use ariel_os::time::{Duration, Instant, Timer};
 use core::fmt::Debug;
+use ariel_os::debug::println;
 use embassy_futures::select::{Either, select};
 use embedded_graphics::pixelcolor::Rgb565;
 use embedded_graphics::pixelcolor::raw::RawU16;
@@ -21,6 +22,7 @@ use embedded_graphics::primitives::{
     Circle, Line, PrimitiveStyle, PrimitiveStyleBuilder, Rectangle,
 };
 use embedded_graphics::{
+    draw_target::DrawTargetExt,
     geometry::Point,
     mono_font::{
         MonoTextStyle,
@@ -106,21 +108,14 @@ pub async fn debug_input<T: DisplayTarget>(
     touch: TouchReceiver,
 ) {
     let mut message = None;
-    let mut position_frame_buffer_data =
-        [Rgb565::CSS_ORANGE_RED; POSITION_PAD_DIAMETER * POSITION_PAD_DIAMETER];
-    let mut position_frame_buffer = FrameBuf::new(
-        &mut position_frame_buffer_data,
-        POSITION_PAD_DIAMETER,
-        POSITION_PAD_DIAMETER,
-    );
     let mut frame_buffer_data = [Rgb565::RED; (320 * BAND_HEIGHT) as usize];
     let mut frame_buffer = FrameBuf::new(&mut frame_buffer_data, 320, BAND_HEIGHT as usize);
-    let mut buffer_touch: Deque<TouchInputResponse, 350> = Deque::new();
-    let mut buffer_x0: Deque<i32, 350> = Deque::new();
-    let mut buffer_y0: Deque<i32, 350> = Deque::new();
-    let mut buffer_x1: Deque<i32, 350> = Deque::new();
-    let mut buffer_y1: Deque<i32, 350> = Deque::new();
-    let mut buffer_time: Deque<u64, 350> = Deque::new();
+    let mut buffer_touch: Deque<TouchInputResponse, 100> = Deque::new();
+    let mut buffer_x0: Deque<i32, 321> = Deque::new();
+    let mut buffer_y0: Deque<i32, 321> = Deque::new();
+    let mut buffer_x1: Deque<i32, 321> = Deque::new();
+    let mut buffer_y1: Deque<i32, 321> = Deque::new();
+    let mut buffer_time: Deque<u64, 321> = Deque::new();
     display.clear(Rgb565::RED).await.unwrap();
     Line::new(Point::new(0, 0), Point::new(320, 0))
         .into_styled(PrimitiveStyle::with_stroke(Rgb565::BLACK, 1))
@@ -141,8 +136,6 @@ pub async fn debug_input<T: DisplayTarget>(
     let mut max_v = u16::MIN;
     let mut x_0 = 0.0;
     let mut y_0 = 0.0;
-    let mut x_1 = 0.0;
-    let mut y_1 = 0.0;
     let mut current_coordinates = Reading::default();
     let mut current_select = 4;
     loop {
@@ -189,7 +182,7 @@ pub async fn debug_input<T: DisplayTarget>(
             }
             buffer_touch.push_back(touch).unwrap();
 
-            if buffer_touch.len() > 320 {
+            if buffer_touch.len() > 99 {
                 buffer_touch.pop_front();
             }
         }
@@ -228,12 +221,6 @@ pub async fn debug_input<T: DisplayTarget>(
             .unwrap();
         frame_buffer.clear(Rgb565::RED).unwrap();
 
-        if min_v != current_coordinates.min_v || max_v != current_coordinates.max_v {
-            min_v = current_coordinates.min_v;
-            max_v = current_coordinates.max_v;
-            draw_min_max(display, 'V', min_v, max_v, 0).await;
-        }
-
         let select = current_coordinates.sel_x_1 + current_coordinates.sel_y_1 * 3;
         let charset = CHARSETS[select as usize];
         if f32::abs(x_0 - current_coordinates.x_0) > 0.01
@@ -243,49 +230,25 @@ pub async fn debug_input<T: DisplayTarget>(
             x_0 = current_coordinates.x_0;
             y_0 = current_coordinates.y_0;
             current_select = select;
-            draw_position(
-                &mut position_frame_buffer,
-                current_coordinates.x_0,
-                current_coordinates.y_0,
-                current_coordinates.sel_x_0,
-                current_coordinates.sel_y_0,
-                current_coordinates.pressed,
-                charset,
-            );
-            display
-                .draw(
-                    Point::new((POSITION_PAD_DIAMETER + 10) as i32, (BAND_HEIGHT + 1) * 4),
-                    position_frame_buffer.size(),
-                    position_frame_buffer.data.iter().copied(),
-                )
-                .await
-                .unwrap();
-            position_frame_buffer.clear(Rgb565::RED).unwrap();
-        }
-        if f32::abs(x_1 - current_coordinates.x_1) > 0.01
-            || f32::abs(y_1 - current_coordinates.y_1) > 0.01
-        {
-            x_1 = current_coordinates.x_1;
-            y_1 = current_coordinates.y_1;
+            for y in (0..POSITION_PAD_DIAMETER).step_by(BAND_HEIGHT as usize) {
+                let y_offset = y as i32;
+                let height = BAND_HEIGHT.min((POSITION_PAD_DIAMETER - y) as i32) as u32;
+                let mut cropped = frame_buffer.cropped(&Rectangle::new(Point::new(0, 0), Size::new(320, height)));
+                let mut trans0 = cropped.translated(Point::new((POSITION_PAD_DIAMETER + 10) as i32, -y_offset));
+                draw_position(&mut trans0, current_coordinates.x_0, current_coordinates.y_0, current_coordinates.sel_x_0, current_coordinates.sel_y_0, current_coordinates.pressed, charset);
+                let mut trans1 = cropped.translated(Point::new(0, -y_offset));
+                draw_position(&mut trans1, current_coordinates.x_1, current_coordinates.y_1, current_coordinates.sel_x_1, current_coordinates.sel_y_1, false, "");
 
-            draw_position(
-                &mut position_frame_buffer,
-                current_coordinates.x_1,
-                current_coordinates.y_1,
-                current_coordinates.sel_x_1,
-                current_coordinates.sel_y_1,
-                false,
-                "",
-            );
-            display
-                .draw(
-                    Point::new(0, (BAND_HEIGHT + 1) * 4),
-                    position_frame_buffer.size(),
-                    position_frame_buffer.data.iter().copied(),
-                )
-                .await
-                .unwrap();
-            position_frame_buffer.clear(Rgb565::CSS_ORANGE_RED).unwrap();
+                display
+                    .draw(
+                        Point::new(0, (BAND_HEIGHT + 1) * 4 + y_offset),
+                        Size::new(320, height),
+                        frame_buffer.data.iter().copied(),
+                    )
+                    .await
+                    .unwrap();
+                frame_buffer.clear(Rgb565::RED).unwrap();
+            }
         }
 
         fill_and_draw_time(&mut frame_buffer, time, &mut buffer_time);
@@ -305,6 +268,8 @@ pub async fn debug_input<T: DisplayTarget>(
             .unwrap();
         frame_buffer.clear(Rgb565::RED).unwrap();
 
+        let mut draw_band_3 = false;
+
         if message.is_none()
             && let Ok(line) = address.try_peek()
         {
@@ -316,9 +281,34 @@ pub async fn debug_input<T: DisplayTarget>(
                         .unwrap_or(line.as_str()),
                 )
                 .unwrap();
-            draw_text(display, &value, 1).await;
+            draw_band_3 = true;
             message = Some(value);
         }
+
+        if min_v != current_coordinates.min_v || max_v != current_coordinates.max_v {
+            min_v = current_coordinates.min_v;
+            max_v = current_coordinates.max_v;
+            draw_band_3 = true;
+        }
+
+        if draw_band_3 {
+            draw_min_max(&mut frame_buffer, 'V', min_v, max_v, 0);
+
+            if let Some(value) = &message {
+                draw_text(&mut frame_buffer, value, 10 + 1 * 110, 1 + 6 + 11);
+            }
+
+            display
+                .draw(
+                    Point::new(0, (BAND_HEIGHT + 1) * 3),
+                    frame_buffer.size(),
+                    frame_buffer.data.iter().copied(),
+                )
+                .await
+                .unwrap();
+            frame_buffer.clear(Rgb565::RED).unwrap();
+        }
+
         time = Some(start.elapsed().as_millis());
         Timer::after(Duration::from_millis(10)).await;
     }
@@ -326,7 +316,7 @@ pub async fn debug_input<T: DisplayTarget>(
 
 fn draw_touch_buffer<T: DrawTarget<Color = Rgb565>>(
     display: &mut T,
-    buffer_touch: &mut Deque<TouchInputResponse, 350>,
+    buffer_touch: &mut Deque<TouchInputResponse, 100>,
     shift: i32,
     color: Rgb565,
 ) where
@@ -523,42 +513,36 @@ fn draw_axis_min_max<T: DrawTarget<Color = Rgb565>, M: core::fmt::Display>(
     .unwrap();
 }
 
-async fn draw_min_max<M: core::fmt::Display, T: DisplayTarget>(
-    display: &mut T,
+fn draw_min_max<M: core::fmt::Display, T: DrawTarget<Color = Rgb565>>(
+    target: &mut T,
     prefix: char,
     min: M,
     max: M,
     band: i32,
-) {
+) where
+    <T as DrawTarget>::Error: Debug,
+{
     let mut value = heapless::String::<22>::new();
-    let Ok(_) = core::fmt::write(&mut value, format_args!("{}={:4}, {:4}", prefix, min, max))
-    else {
+    if core::fmt::write(&mut value, format_args!("{}={:4}, {:4}", prefix, min, max)).is_err() {
         info!("Failed to write min and max");
         return;
     };
-    draw_text(display, &value, band).await;
+    let x_0 = 10 + band * 110;
+    let y_0 = 1 + 6 + 11;
+    draw_text(target, &value, x_0, y_0);
 }
 
-async fn draw_text<T: DisplayTarget>(display: &mut T, value: &heapless::String<22>, band: i32) {
-    let mut frame_buffer_data = [Rgb565::RED; (100 * 13) as usize];
-    let mut frame_buffer = FrameBuf::new(&mut frame_buffer_data, 100, 13);
+fn draw_text<T: DrawTarget<Color = Rgb565>>(target: &mut T, value: &str, x: i32, y: i32)
+where
+    <T as DrawTarget>::Error: Debug,
+{
     Text::new(
         value,
-        Point::new(0, 11),
+        Point::new(x, y),
         MonoTextStyle::new(&FONT_8X13_ITALIC, Rgb565::BLACK),
     )
-    .draw(&mut frame_buffer)
+    .draw(target)
     .unwrap();
-    let y_0 = (BAND_HEIGHT + 1) * 3 + 1;
-    let x_0 = 10 + band * 110;
-    display
-        .draw(
-            Point::new(x_0, y_0 + 6),
-            frame_buffer.size(),
-            frame_buffer.data.iter().copied(),
-        )
-        .await
-        .unwrap();
 }
 
 #[allow(dead_code)]
@@ -566,7 +550,7 @@ fn redraw_and_fill<T: DrawTarget<Color = Rgb565>>(
     display: &mut T,
     color: Rgb565,
     value: i32,
-    buffer: &mut Deque<i32, 350>,
+    buffer: &mut Deque<i32, 321>,
 ) where
     <T as DrawTarget>::Error: Debug,
 {
@@ -590,7 +574,7 @@ fn redraw_and_fill<T: DrawTarget<Color = Rgb565>>(
 
 fn draw_buffer<T: DrawTarget<Color = Rgb565>>(
     display: &mut T,
-    buffer: &Deque<i32, 350>,
+    buffer: &Deque<i32, 321>,
     color: Rgb565,
 ) where
     <T as DrawTarget>::Error: Debug,
@@ -632,7 +616,7 @@ fn draw_buffer<T: DrawTarget<Color = Rgb565>>(
 /// Draw the time graph scaling it to currently visible min and max, this one is about 5 ms slower.
 ///
 /// ```no_run
-/// let mut buffer_time: Deque<u64, 350> = Deque::new();
+/// let mut buffer_time: Deque<u64, 321> = Deque::new();
 ///
 /// draw_time(&mut self.display, start, &mut buffer_time);
 /// ```
@@ -640,7 +624,7 @@ fn draw_buffer<T: DrawTarget<Color = Rgb565>>(
 fn fill_and_draw_time<T: DrawTarget<Color = Rgb565>>(
     display: &mut T,
     elapsed: Option<u64>,
-    buffer_time: &mut Deque<u64, 350>,
+    buffer_time: &mut Deque<u64, 321>,
 ) where
     <T as DrawTarget>::Error: Debug,
 {
@@ -659,7 +643,7 @@ fn fill_and_draw_time<T: DrawTarget<Color = Rgb565>>(
 
 fn draw_buffer_scaled<T: DrawTarget<Color = Rgb565>>(
     display: &mut T,
-    input_buffer: &Deque<u64, 350>,
+    input_buffer: &Deque<u64, 321>,
     color: Rgb565,
 ) -> Option<(u64, u64)>
 where

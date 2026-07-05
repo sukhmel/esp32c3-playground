@@ -5,9 +5,7 @@ extern crate alloc;
 include!(concat!(env!("OUT_DIR"), "/secrets.rs"));
 
 use crate::buzzer::{Melody, SoundLed, buzz};
-use crate::inter_task::{
-    CHAR_CHANNEL, COORDINATES_CHANNEL, MESSAGE_CHANNEL, MESSAGE_SIZE, SOUND_CHANNEL, TOUCH_CHANNEL,
-};
+use crate::inter_task::{CHAR_CHANNEL, COORDINATES_CHANNEL, KEYPRESS_CHANNEL, MESSAGE_CHANNEL, MESSAGE_SIZE, SOUND_CHANNEL, TOUCH_CHANNEL};
 use crate::pins::Peripherals;
 use crate::touch::Xpt2046TouchInput;
 use ariel_os::asynch::Spawner;
@@ -17,8 +15,9 @@ use ariel_os::time::{Duration, Timer, with_timeout};
 use ariel_os_hal::gpio::{Level, Output};
 #[cfg(not(feature = "async_ili9341"))]
 use core::cell::RefCell;
+use ariel_os::debug::println;
 use display::Display;
-use embassy_futures::join::{join3, join4};
+use embassy_futures::join::{join5};
 #[cfg(feature = "async_ili9341")]
 use embassy_sync::blocking_mutex::raw::NoopRawMutex;
 #[cfg(not(feature = "async_ili9341"))]
@@ -29,12 +28,12 @@ use esp_hal::gpio::OutputPin;
 use esp_hal::ledc::Ledc;
 use esp_hal::spi::master::{Config, Spi};
 use esp_hal::time::Rate;
+use crate::keyboard::serve_keyboard;
 
 mod buzzer;
 mod display;
 mod input;
 pub mod inter_task;
-#[cfg(feature = "keyboard")]
 mod keyboard;
 mod led;
 pub mod pins;
@@ -46,7 +45,7 @@ pub mod rainbow {
 
 #[panic_handler]
 fn panic(info: &core::panic::PanicInfo) -> ! {
-    info!("{}", info);
+    println!("{}", info);
     loop {}
 }
 
@@ -88,7 +87,8 @@ async fn ui(peripherals: Peripherals) {
     let ledc = Ledc::new(peripherals.binary.ledc);
     // let rmt = Rmt::new(peripherals.binary.rmt, Rate::from_mhz(80)).unwrap();
     // let buzzer = SoundLed::new(peripherals.binary.pin19, ledc, peripherals.binary.pin8, rmt);
-    join4(
+    info!("Starting join");
+    let _ = join5(
         display.debug_input(
             COORDINATES_CHANNEL.receiver(),
             MESSAGE_CHANNEL.receiver(),
@@ -97,6 +97,7 @@ async fn ui(peripherals: Peripherals) {
         buzz(peripherals.binary.pin19, ledc, SOUND_CHANNEL.receiver()),
         input::read_joystick(peripherals.analog),
         touch.run(),
+        serve_keyboard(KEYPRESS_CHANNEL.receiver())
     )
     .await;
     info!("Finished UI");
@@ -116,6 +117,7 @@ async fn network(spawner: Spawner) {
     let net = ariel_os::net::network_stack().await.unwrap();
     info!("Connecting to {}", WIFI_SSID);
     net.wait_config_up().await;
+    info!("net up");
     if let Some(ip) = net.config_v4() {
         info!("IP: {:?}", ip.address.address());
         let mut channel_msg = heapless::String::<MESSAGE_SIZE>::new();
@@ -140,9 +142,9 @@ async fn network(spawner: Spawner) {
 
 #[ariel_os::task(pool_size = 1)]
 async fn run_echo_server(stack: Stack<'static>) -> ! {
-    let mut rx_buffer = [0; 1024];
-    let mut tx_buffer = [0; 1024];
-    let mut echo_buffer = [0; 1024];
+    let mut rx_buffer = [0; 64];
+    let mut tx_buffer = [0; 64];
+    let mut echo_buffer = [0; 64];
 
     let mut socket = TcpSocket::new(stack, &mut rx_buffer, &mut tx_buffer);
     info!("Server function started. Listening on port 8080...");

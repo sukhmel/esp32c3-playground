@@ -1,4 +1,4 @@
-use crate::inter_task::{CHAR_CHANNEL, COORDINATES_CHANNEL, Reading};
+use crate::inter_task::{CHAR_CHANNEL, COORDINATES_CHANNEL, Reading, KEYPRESS_CHANNEL, Keypress};
 use crate::pins::AnalogPeripherals;
 use ariel_os::debug::log::{debug, warn};
 use ariel_os::time::{Instant, Timer};
@@ -108,6 +108,7 @@ pub async fn read_joystick(peripherals: AnalogPeripherals) {
                     if CHAR_CHANNEL.try_send(char).is_err() {
                         warn!("Failed to send keypress");
                     }
+                    let _ = KEYPRESS_CHANNEL.try_send(Keypress::Pressed(char));
                     keypress = Some(char);
                     keypress_cycle = 0;
                 }
@@ -117,6 +118,8 @@ pub async fn read_joystick(peripherals: AnalogPeripherals) {
                     if CHAR_CHANNEL.try_send(char).is_err() {
                         warn!("Failed to send keypress");
                     }
+                    let _ = KEYPRESS_CHANNEL.try_send(Keypress::Released(prev_char));
+                    let _ = KEYPRESS_CHANNEL.try_send(Keypress::Pressed(char));
                     keypress = Some(char);
                     keypress_cycle = 0;
                 }
@@ -127,12 +130,13 @@ pub async fn read_joystick(peripherals: AnalogPeripherals) {
                         if CHAR_CHANNEL.try_send(char).is_err() {
                             warn!("Failed to send keypress");
                         }
+                        let _ = KEYPRESS_CHANNEL.try_send(Keypress::Pressed(char));
                     }
                 }
             }
         } else {
             if let Some(char) = keypress.take() {
-                debug!("Key released: {}", char);
+                let _ = KEYPRESS_CHANNEL.try_send(Keypress::Released(char));
             }
             keypress_cycle = 0;
         }

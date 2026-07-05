@@ -1,128 +1,372 @@
-//! This is practically verbatim copy of an example found in <https://gitlab.ucc.gu.uwa.edu.au/matt/embassy-random/-/blob/matt/embassy-hack/examples/nrf/src/bin/usb_hid_keyboard.rs>
-//! and it does not seem to compile with the current versions. But since it is not yet possible to
-//! use USB, it'll do for now.
+//! Parts taken from <https://github.com/bjoernQ/esp32c3-ble-hid>, parts from <https://github.com/embassy-rs/trouble/blob/trouble-host-v0.5.1/examples/apps/src/ble_bas_peripheral.rs>
 
-use ariel_os::debug::log::info;
-use core::sync::atomic::{AtomicBool, Ordering};
-use embassy_usb::class::hid::{ReportId, RequestHandler, State};
-use embassy_usb::control::OutResponse;
-use embassy_usb::{Builder, Config, Handler};
+use crate::inter_task::{Keypress, KeypressReceiver};
+use ariel_os::ble::ble_stack;
+use ariel_os::debug::log::{info, warn};
+use ariel_os::time::{Duration, Timer};
+use bt_hci::param::Status;
+use embassy_futures::join::join;
+use embassy_futures::select::{select, Either};
+use trouble_host::prelude::*;
 
-static SUSPENDED: AtomicBool = AtomicBool::new(false);
-
-fn test() {
-    let mut config = Config::new(0xc0de, 0xcafe);
-    config.manufacturer = Some("Sukhmel");
-    config.product = Some("HID keyboard attempt");
-    config.serial_number = Some("001");
-    config.max_power = 100;
-    config.max_packet_size_0 = 64;
-    config.supports_remote_wakeup = true;
-
-    // Create embassy-usb DeviceBuilder using the driver and config.
-    // It needs some buffers for building the descriptors.
-    let mut device_descriptor = [0; 256];
-    let mut config_descriptor = [0; 256];
-    let mut bos_descriptor = [0; 256];
-    let mut control_buf = [0; 64];
-    let request_handler = MyRequestHandler {};
-    let device_state_handler = MyDeviceStateHandler::new();
-
-    let mut state = State::new();
-
-    let mut builder = Builder::new(
-        driver,
-        config,
-        &mut device_descriptor,
-        &mut config_descriptor,
-        &mut bos_descriptor,
-        &mut control_buf,
-        Some(&device_state_handler),
-    );
+macro_rules! count {
+	() => { 0u8 };
+	($x:tt $($xs:tt)*) => {1u8 + count!($($xs)*)};
 }
 
-struct MyRequestHandler {}
+macro_rules! hid {
+	($(( $($xs:tt),*)),+ $(,)?) => { [ $( (count!($($xs)*)-1) | $($xs),* ),* ] };
+}
 
-impl RequestHandler for MyRequestHandler {
-    fn get_report(&self, id: ReportId, _buf: &mut [u8]) -> Option<usize> {
-        info!("Get report for {:?}", id);
-        None
-    }
+// Main items
+pub const HIDINPUT: u8 = 0x80;
+pub const HIDOUTPUT: u8 = 0x90;
+pub const FEATURE: u8 = 0xb0;
+pub const COLLECTION: u8 = 0xa0;
+pub const END_COLLECTION: u8 = 0xc0;
 
-    fn set_report(&self, id: ReportId, data: &[u8]) -> OutResponse {
-        info!("Set report for {:?}: {:?}", id, data);
-        OutResponse::Accepted
-    }
+// Global items
+pub const USAGE_PAGE: u8 = 0x04;
+pub const LOGICAL_MINIMUM: u8 = 0x14;
+pub const LOGICAL_MAXIMUM: u8 = 0x24;
+pub const PHYSICAL_MINIMUM: u8 = 0x34;
+pub const PHYSICAL_MAXIMUM: u8 = 0x44;
+pub const UNIT_EXPONENT: u8 = 0x54;
+pub const UNIT: u8 = 0x64;
+pub const REPORT_SIZE: u8 = 0x74; //bits
+pub const REPORT_ID: u8 = 0x84;
+pub const REPORT_COUNT: u8 = 0x94; //bytes
+pub const PUSH: u8 = 0xa4;
+pub const POP: u8 = 0xb4;
 
-    fn set_idle_ms(&self, id: Option<ReportId>, dur: u32) {
-        info!("Set idle rate for {:?} to {:?}", id, dur);
-    }
+// Local items
+pub const USAGE: u8 = 0x08;
+pub const USAGE_MINIMUM: u8 = 0x18;
+pub const USAGE_MAXIMUM: u8 = 0x28;
+pub const DESIGNATOR_INDEX: u8 = 0x38;
+pub const DESIGNATOR_MINIMUM: u8 = 0x48;
+pub const DESIGNATOR_MAXIMUM: u8 = 0x58;
+pub const STRING_INDEX: u8 = 0x78;
+pub const STRING_MINIMUM: u8 = 0x88;
+pub const STRING_MAXIMUM: u8 = 0x98;
+pub const DELIMITER: u8 = 0xa8;
 
-    fn get_idle_ms(&self, id: Option<ReportId>) -> Option<u32> {
-        info!("Get idle rate for {:?}", id);
-        None
+const KEYBOARD_ID: u8 = 0x01;
+
+const HID_REPORT_MAP: [u8; 65] = hid!(
+    (USAGE_PAGE, 0x01), // USAGE_PAGE (Generic Desktop Ctrls)
+    (USAGE, 0x06),      // USAGE (Keyboard)
+    (COLLECTION, 0x01), // COLLECTION (Application)
+    // ------------------------------------------------- Keyboard
+    (REPORT_ID, KEYBOARD_ID), //   REPORT_ID (1)
+    (USAGE_PAGE, 0x07),       //   USAGE_PAGE (Kbrd/Keypad)
+    (USAGE_MINIMUM, 0xE0),    //   USAGE_MINIMUM (0xE0)
+    (USAGE_MAXIMUM, 0xE7),    //   USAGE_MAXIMUM (0xE7)
+    (LOGICAL_MINIMUM, 0x00),  //   LOGICAL_MINIMUM (0)
+    (LOGICAL_MAXIMUM, 0x01),  //   Logical Maximum (1)
+    (REPORT_SIZE, 0x01),      //   REPORT_SIZE (1)
+    (REPORT_COUNT, 0x08),     //   REPORT_COUNT (8)
+    (HIDINPUT, 0x02), //   INPUT (Data,Var,Abs,No Wrap,Linear,Preferred State,No Null Position)
+    (REPORT_COUNT, 0x01), //   REPORT_COUNT (1) ; 1 byte (Reserved)
+    (REPORT_SIZE, 0x08), //   REPORT_SIZE (8)
+    (HIDINPUT, 0x01), //   INPUT (Const,Array,Abs,No Wrap,Linear,Preferred State,No Null Position)
+    (REPORT_COUNT, 0x05), //   REPORT_COUNT (5) ; 5 bits (Num lock, Caps lock, Scroll lock, Compose, Kana)
+    (REPORT_SIZE, 0x01),  //   REPORT_SIZE (1)
+    (USAGE_PAGE, 0x08),   //   USAGE_PAGE (LEDs)
+    (USAGE_MINIMUM, 0x01), //   USAGE_MINIMUM (0x01) ; Num Lock
+    (USAGE_MAXIMUM, 0x05), //   USAGE_MAXIMUM (0x05) ; Kana
+    (HIDOUTPUT, 0x02), //   OUTPUT (Data,Var,Abs,No Wrap,Linear,Preferred State,No Null Position,Non-volatile)
+    (REPORT_COUNT, 0x01), //   REPORT_COUNT (1) ; 3 bits (Padding)
+    (REPORT_SIZE, 0x03), //   REPORT_SIZE (3)
+    (HIDOUTPUT, 0x01), //   OUTPUT (Const,Array,Abs,No Wrap,Linear,Preferred State,No Null Position,Non-volatile)
+    (REPORT_COUNT, 0x06), //   REPORT_COUNT (6) ; 6 bytes (Keys)
+    (REPORT_SIZE, 0x08), //   REPORT_SIZE(8)
+    (LOGICAL_MINIMUM, 0x00), //   LOGICAL_MINIMUM(0)
+    (LOGICAL_MAXIMUM, 0x65), //   LOGICAL_MAXIMUM(0x65) ; 101 keys
+    (USAGE_PAGE, 0x07), //   USAGE_PAGE (Kbrd/Keypad)
+    (USAGE_MINIMUM, 0x00), //   USAGE_MINIMUM (0)
+    (USAGE_MAXIMUM, 0x65), //   USAGE_MAXIMUM (0x65)
+    (HIDINPUT, 0x00),  //   INPUT (Data,Array,Abs,No Wrap,Linear,Preferred State,No Null Position)
+    (END_COLLECTION),  // END_COLLECTION
+);
+
+struct KeyboardReport {
+    modifiers: u8,
+    reserved: u8,
+    key_codes: [u8; 6],
+}
+
+impl KeyboardReport {
+    fn to_bytes(&self) -> [u8; 8] {
+        [
+            self.modifiers,
+            self.reserved,
+            self.key_codes[0],
+            self.key_codes[1],
+            self.key_codes[2],
+            self.key_codes[3],
+            self.key_codes[4],
+            self.key_codes[5],
+        ]
     }
 }
 
-struct MyDeviceStateHandler {
-    configured: AtomicBool,
+#[gatt_server]
+struct Server {
+    hid_service: HidService,
 }
 
-impl MyDeviceStateHandler {
-    fn new() -> Self {
-        MyDeviceStateHandler {
-            configured: AtomicBool::new(false),
-        }
-    }
+#[gatt_service(uuid = "1812")] // Standard Bluetooth HID Service UUID
+struct HidService {
+    // HID Information Characteristic (Country Code = 0, Flags = 0x01)
+    #[characteristic(uuid = characteristic::HID_INFORMATION, read, value = [0x00, 0x01, 0x00, 0x01])]
+    hid_info: [u8; 4],
+
+    // HID Report Map Descriptor
+    #[characteristic(uuid = characteristic::REPORT_MAP, read, value = HID_REPORT_MAP)]
+    report_map: [u8; 65],
+
+    // Dynamic Input Report where key modifier/scan bytes are dispatched
+    #[characteristic(uuid = characteristic::REPORT, read, notify)]
+    input_report: [u8; 8],
+
+    // Required HID Control Point Handshake characteristic
+    #[characteristic(uuid = characteristic::HID_CONTROL_POINT, write_without_response)]
+    control_point: u8,
 }
 
-impl Handler for MyDeviceStateHandler {
-    fn enabled(&self, enabled: bool) {
-        self.configured.store(false, Ordering::Relaxed);
-        SUSPENDED.store(false, Ordering::Release);
-        if enabled {
-            info!("Device enabled");
-        } else {
-            info!("Device disabled");
-        }
-    }
+pub async fn serve_keyboard(mut channel: KeypressReceiver) -> ! {
+    let stack = ble_stack().await;
+    let mut host = stack.build();
+    let server = Server::new_with_config(GapConfig::Peripheral(PeripheralConfig {
+        name: "ESP32-C3 Joy KB",
+        appearance: &appearance::human_interface_device::KEYBOARD,
+    }))
+    .unwrap();
 
-    fn reset(&self) {
-        self.configured.store(false, Ordering::Relaxed);
-        info!("Bus reset, the Vbus current limit is 100mA");
-    }
-
-    fn addressed(&self, addr: u8) {
-        self.configured.store(false, Ordering::Relaxed);
-        info!("USB address set to: {}", addr);
-    }
-
-    fn configured(&self, configured: bool) {
-        self.configured.store(configured, Ordering::Relaxed);
-        if configured {
-            info!(
-                "Device configured, it may now draw up to the configured current limit from Vbus."
-            )
-        } else {
-            info!("Device is no longer configured, the Vbus current limit is 100mA.");
-        }
-    }
-
-    fn suspended(&self, suspended: bool) {
-        if suspended {
-            info!(
-                "Device suspended, the Vbus current limit is 500µA (or 2.5mA for high-power devices with remote wakeup enabled)."
-            );
-            SUSPENDED.store(true, Ordering::Release);
-        } else {
-            SUSPENDED.store(false, Ordering::Release);
-            if self.configured.load(Ordering::Relaxed) {
-                info!(
-                    "Device resumed, it may now draw up to the configured current limit from Vbus"
-                );
-            } else {
-                info!("Device resumed, the Vbus current limit is 100mA");
+    join(ble_task(host.runner), async {
+        loop {
+            match advertise("ESP32-C3 Joystick Keyboard", &mut host.peripheral, &server).await {
+                Ok(conn) => {
+                    // run until task ends (usually because the connection has been closed),
+                    // then return to advertising state.
+                    select(custom_task(&server, &conn, &mut channel), gatt_events_task(&server, &conn)).await;
+                }
+                Err(e) => {
+                    warn!("[adv] error: {:?}", e);
+                    Timer::after(Duration::from_secs(100000)).await;
+                }
             }
         }
+    })
+    .await
+    .0
+}
+
+async fn custom_task<P: PacketPool>(
+    server: &Server<'_>,
+    conn: &GattConnection<'_, '_, P>,
+    channel: &mut KeypressReceiver,
+) {
+    let mut report = [0u8; 8];
+
+    loop {
+        let keypress = channel.receive().await;
+
+        match keypress {
+            Keypress::Pressed(ch) => {
+                if let Some(keystroke) = char_to_hid(ch) {
+                    report[0] = keystroke.modifier;
+                    report[2] = keystroke.keycode;
+                }
+            }
+            Keypress::Released(_ch) => {}
+        }
+
+        if server
+            .hid_service
+            .input_report
+            .notify(conn, &report)
+            .await
+            .is_err()
+        {
+            info!("[custom_task] error notifying connection");
+            break
+        }
     }
+}
+
+/// Stream Events until the connection closes.
+///
+/// This function will handle the GATT events and process them.
+/// This is how we interact with read and write requests.
+async fn gatt_events_task(server: &Server<'_>, conn: &GattConnection<'_, '_, DefaultPacketPool>) -> Result<Option<Status>, Error> {
+    let level = server.hid_service.input_report;
+
+    loop {
+        let event = conn.next().await;
+        match event {
+            GattConnectionEvent::Disconnected { reason } => return Ok(Some(reason)),
+            GattConnectionEvent::PairingComplete { security_level, .. } => {
+                info!("[gatt] pairing complete: {:?}", security_level);
+            }
+            GattConnectionEvent::PairingFailed(err) => {
+                warn!("[gatt] pairing error: {:?}", err);
+            }
+            GattConnectionEvent::PassKeyInput => {
+                info!("[gatt] passkey input");
+                // Normally fetched from the user
+                conn.pass_key_input(1234)?;
+            }
+            GattConnectionEvent::Gatt { event } => {
+                let reply_result = event.accept();
+                match reply_result {
+                    Ok(reply) => reply.send().await,
+                    Err(e) => warn!("[gatt] error sending response: {:?}", e),
+                }
+            }
+            _ => {} // ignore other Gatt Connection Events
+        };
+    }
+}
+
+/// This is a background task required to run forever alongside any other BLE tasks.
+async fn ble_task<C: Controller, P: PacketPool>(mut runner: Runner<'_, C, P>) -> ! {
+    loop {
+        if let Err(e) = runner.run().await {
+            panic!("[ble_task] error: {:?}", e);
+        }
+    }
+}
+
+/// Create an advertiser to use to connect to a BLE Central, and wait for it to connect.
+async fn advertise<'values, 'server, C: Controller>(
+    name: &'values str,
+    peripheral: &mut Peripheral<'values, C, DefaultPacketPool>,
+    server: &'server Server<'values>,
+) -> Result<GattConnection<'values, 'server, DefaultPacketPool>, BleHostError<C::Error>> {
+    let mut advertiser_data = [0; 31];
+    let len = AdStructure::encode_slice(
+        &[
+            AdStructure::Flags(LE_GENERAL_DISCOVERABLE | BR_EDR_NOT_SUPPORTED),
+            // Announces the HID service availability (0x1812)
+            AdStructure::ServiceUuids16(&[[0x12, 0x18]]),
+        ],
+        &mut advertiser_data[..],
+    )?;
+    let mut scan_data = [0u8; 31];
+    let mut scan_len = AdStructure::encode_slice(
+        &[
+            AdStructure::CompleteLocalName(name.as_bytes()),
+        ],
+        &mut scan_data[..],
+    )?;
+    let advertiser = peripheral
+        .advertise(
+            &Default::default(),
+            Advertisement::ConnectableScannableUndirected {
+                adv_data: &advertiser_data[..len],
+                scan_data: &scan_data[..scan_len],
+            },
+        )
+        .await?;
+    info!("[adv] advertising");
+    let conn = advertiser.accept().await?.with_attribute_server(server)?;
+    info!("[adv] connection established");
+    Ok(conn)
+}
+
+#[derive(Copy, Clone, Debug)]
+pub struct KeyStroke {
+    pub modifier: u8,
+    pub keycode: u8,
+}
+
+// Standard HID Modifier bits
+const MODIFIER_NONE: u8 = 0x00;
+const MODIFIER_SHIFT: u8 = 0x02; // Left Shift bit flag
+
+// Index matches ASCII value directly. Format: (Modifier, KeyCode)
+const ASCII_TO_HID: [(u8, u8); 128] = {
+    let mut table = [(0u8, 0u8); 128];
+
+    // Numbers 1-9, then 0
+    table[b'1' as usize] = (MODIFIER_NONE, 0x1E);
+    table[b'2' as usize] = (MODIFIER_NONE, 0x1F);
+    table[b'3' as usize] = (MODIFIER_NONE, 0x20);
+    table[b'4' as usize] = (MODIFIER_NONE, 0x21);
+    table[b'5' as usize] = (MODIFIER_NONE, 0x22);
+    table[b'6' as usize] = (MODIFIER_NONE, 0x23);
+    table[b'7' as usize] = (MODIFIER_NONE, 0x24);
+    table[b'8' as usize] = (MODIFIER_NONE, 0x25);
+    table[b'9' as usize] = (MODIFIER_NONE, 0x26);
+    table[b'0' as usize] = (MODIFIER_NONE, 0x27);
+
+    // Special Controls
+    table[b'\n' as usize] = (MODIFIER_NONE, 0x28); // Enter
+    table[b'\t' as usize] = (MODIFIER_NONE, 0x2B); // Tab
+    table[b' ' as usize] = (MODIFIER_NONE, 0x2C); // Spacebar
+
+    // Populate letters 'a' through 'z' (HID codes 0x04 to 0x1D)
+    let mut i = 0;
+    while i < 26 {
+        let lower_ascii = (b'a' + i) as usize;
+        let upper_ascii = (b'A' + i) as usize;
+        let hid_code = 0x04 + i;
+
+        table[lower_ascii] = (MODIFIER_NONE, hid_code);
+        table[upper_ascii] = (MODIFIER_SHIFT, hid_code); // Uppercase needs Shift
+        i += 1;
+    }
+
+    table[b',' as usize] = (MODIFIER_NONE, 0x36); // ,
+    table[b'<' as usize] = (MODIFIER_SHIFT, 0x36); // <
+    table[b'.' as usize] = (MODIFIER_NONE, 0x37); // .
+    table[b'>' as usize] = (MODIFIER_SHIFT, 0x37); // >
+    table[b'/' as usize] = (MODIFIER_NONE, 0x38); // /
+    table[b'?' as usize] = (MODIFIER_SHIFT, 0x38); // ?
+    table[b';' as usize] = (MODIFIER_NONE, 0x33); // ;
+    table[b':' as usize] = (MODIFIER_SHIFT, 0x33); // :
+    table[b'\'' as usize] = (MODIFIER_NONE, 0x34); // '
+    table[b'"' as usize] = (MODIFIER_SHIFT, 0x34); // "
+
+    table[b'[' as usize] = (MODIFIER_NONE, 0x2F); // [
+    table[b'{' as usize] = (MODIFIER_SHIFT, 0x2F); // {
+    table[b']' as usize] = (MODIFIER_NONE, 0x30); // ]
+    table[b'}' as usize] = (MODIFIER_SHIFT, 0x30); // }
+    table[b'\\' as usize] = (MODIFIER_NONE, 0x31); // \
+    table[b'|' as usize] = (MODIFIER_SHIFT, 0x31); // |
+
+    table[b'-' as usize] = (MODIFIER_NONE, 0x2D); // -
+    table[b'_' as usize] = (MODIFIER_SHIFT, 0x2D); // _
+    table[b'=' as usize] = (MODIFIER_NONE, 0x2E); // =
+    table[b'+' as usize] = (MODIFIER_SHIFT, 0x2E); // +
+
+    table[b'`' as usize] = (MODIFIER_NONE, 0x35); // `
+    table[b'~' as usize] = (MODIFIER_SHIFT, 0x35); // ~
+
+    // Shift Number Row Symbols
+    table[b'!' as usize] = (MODIFIER_SHIFT, 0x1E); // !
+    table[b'@' as usize] = (MODIFIER_SHIFT, 0x1F); // @
+    table[b'#' as usize] = (MODIFIER_SHIFT, 0x20); // #
+    table[b'$' as usize] = (MODIFIER_SHIFT, 0x21); // $
+    table[b'%' as usize] = (MODIFIER_SHIFT, 0x22); // %
+    table[b'^' as usize] = (MODIFIER_SHIFT, 0x23); // ^
+    table[b'&' as usize] = (MODIFIER_SHIFT, 0x24); // &
+    table[b'*' as usize] = (MODIFIER_SHIFT, 0x25); // *
+    table[b'(' as usize] = (MODIFIER_SHIFT, 0x26); // (
+    table[b')' as usize] = (MODIFIER_SHIFT, 0x27); // )
+
+    table
+};
+
+pub fn char_to_hid(c: char) -> Option<KeyStroke> {
+    let ascii_val = c as u32;
+    if ascii_val < 128 {
+        let (modifier, keycode) = ASCII_TO_HID[ascii_val as usize];
+        if keycode != 0 {
+            return Some(KeyStroke { modifier, keycode });
+        }
+    }
+    None // Unmapped or invalid character
 }

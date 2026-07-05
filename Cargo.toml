@@ -4,12 +4,12 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-ariel-os = { path = "build/imports/ariel-os/src/ariel-os", features = ["time", "wifi-esp", "net", "ipv4", "dns", "tcp"], default-features = false }
+ariel-os = { path = "build/imports/ariel-os/src/ariel-os", features = ["time", "wifi-esp", "net", "ipv4", "dns", "tcp", "ble"], default-features = false }
 ariel-os-hal = { path = "build/imports/ariel-os/src/ariel-os-hal" }
+bt-hci = "0.6"
 embassy-embedded-hal = { version = "0.5", optional = true }
 embassy-futures = "0.1"
 embassy-sync = { version = "0.7.2" }
-embassy-usb = { version = "0.6", optional = true }
 embedded-graphics = "0.8"
 embedded-graphics-framebuf = "0.5"
 embedded-hal-async = { version = "1", optional = true }
@@ -23,7 +23,9 @@ mipidsi = "0.10"
 nb = "1"
 num_enum = { version = "0.7.6", default-features = false }
 smart-leds = "0.4"
+static_cell = "2"
 sky-ili9341 = { version = "0.1", features = ["async", "graphics"], optional = true }
+trouble-host = { version = "0.5.1", features = ["gatt", "derive", "peripheral", "security"] }
 xpt2046-async = { git = "https://github.com/sukhmel/xpt2046_async.git" }
 
 [patch.crates-io]
@@ -38,9 +40,14 @@ unexpected_cfgs = { level = "warn", check-cfg = [
 async_ili9341 = ["sky-ili9341", "embedded-hal-bus/async", "embedded-hal-async", "embassy-embedded-hal"]
 agm1264f = []
 default = ["async_ili9341"]
-# esp32c3 does not support acting as a HID, I will need to try this again with esp32s3
-keyboard = ["embassy-usb"]
 
 [build-dependencies]
 toml = "1"
 embedded-graphics = "0.8"
+
+[profile.release]
+opt-level = "z"     # Optimize aggressively for binary size
+lto = true          # Enable Link-Time Optimization across all crates
+codegen-units = 1   # Reduce parallel code generation to maximize LTO efficiency
+panic = "abort"     # Strip unwinding code to save massive amounts of flash
+strip = false       # Automatically strip debug symbols from the final ELF
