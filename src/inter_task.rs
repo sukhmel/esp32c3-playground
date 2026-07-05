@@ -2,6 +2,7 @@ use crate::buzzer::Melody;
 use crate::touch::TouchInputResponse;
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::channel::{Channel, Receiver};
+use embassy_sync::watch::{Receiver as WatchReceiver, Watch};
 
 pub type MessageChannelType =
     Channel<CriticalSectionRawMutex, heapless::String<MESSAGE_SIZE>, CHANNEL_SIZE>;
@@ -22,6 +23,23 @@ pub type KeypressChannelType = Channel<CriticalSectionRawMutex, Keypress, LARGE_
 pub type KeypressReceiver =
     Receiver<'static, CriticalSectionRawMutex, Keypress, LARGE_CHANNEL_SIZE>;
 
+/// Number of independent consumers of a [`Watch`]. Keep in sync with `.receiver()` calls.
+pub const WATCH_CONSUMERS: usize = 2;
+
+/// Latest-value channel for the "IP:port" line shown on screen. Unlike a
+/// [`Channel`], a [`Watch`] keeps only the most recent value, so a slow display
+/// consumer can never make the producer block or drop the current address.
+pub type IpDisplayWatch = Watch<CriticalSectionRawMutex, heapless::String<MESSAGE_SIZE>, WATCH_CONSUMERS>;
+pub type IpDisplayReceiver =
+    WatchReceiver<'static, CriticalSectionRawMutex, heapless::String<MESSAGE_SIZE>, WATCH_CONSUMERS>;
+
+/// Latest-value channel carrying BLE connection state (`true` = a central is
+/// connected). The Wi-Fi side observes this to stand down while BLE is active,
+/// since the ESP32-C3 shares a single 2.4 GHz radio between Wi-Fi and BLE.
+pub type BleStateWatch = Watch<CriticalSectionRawMutex, bool, WATCH_CONSUMERS>;
+pub type BleStateReceiver =
+    WatchReceiver<'static, CriticalSectionRawMutex, bool, WATCH_CONSUMERS>;
+
 pub const MESSAGE_SIZE: usize = 128;
 pub const CHANNEL_SIZE: usize = 2;
 pub const LARGE_CHANNEL_SIZE: usize = 10;
@@ -31,6 +49,8 @@ pub static COORDINATES_CHANNEL: CoordinatesChannelType = Channel::new();
 pub static CHAR_CHANNEL: CharChannelType = Channel::new();
 pub static KEYPRESS_CHANNEL: KeypressChannelType = Channel::new();
 pub static TOUCH_CHANNEL: TouchChannelType = Channel::new();
+pub static IP_DISPLAY: IpDisplayWatch = Watch::new();
+pub static BLE_CONNECTED: BleStateWatch = Watch::new();
 
 #[derive(Debug)]
 pub struct Reading {

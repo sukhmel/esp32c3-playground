@@ -12,7 +12,13 @@ apps:
     env:
       global:
         CARGO_ENV:
-         - "CONFIG_HEAPSIZE=180000"
+          # This board's default executor stack (8192) seems too small for the
+          # WiFi(net_task) + BLE + async-display workload sharing one executor
+          # thread; net_task's smoltcp/esp-radio poll chain overflows it and
+          # corrupts adjacent static state (surfaces as embassy-net "RefCell
+          # already borrowed")
+          - "CONFIG_EXECUTOR_STACKSIZE=16384"
+          - "CONFIG_HEAPSIZE=150000"
 
         # does not work
 #         - "ESPFLASH_PARTITION_TABLE=partitions.csv"

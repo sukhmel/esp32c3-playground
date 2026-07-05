@@ -1,12 +1,11 @@
 //! Parts taken from <https://github.com/bjoernQ/esp32c3-ble-hid>, parts from <https://github.com/embassy-rs/trouble/blob/trouble-host-v0.5.1/examples/apps/src/ble_bas_peripheral.rs>
 
-use crate::inter_task::{Keypress, KeypressReceiver};
+use crate::inter_task::{Keypress, KeypressReceiver, BLE_CONNECTED};
 use ariel_os::ble::ble_stack;
 use ariel_os::debug::log::{info, warn};
 use ariel_os::time::{Duration, Timer};
 use bt_hci::param::Status;
 use embassy_futures::join::join;
-use embassy_futures::select::{select, Either};
 use trouble_host::prelude::*;
 
 macro_rules! count {
@@ -126,8 +125,18 @@ struct HidService {
     #[characteristic(uuid = characteristic::REPORT_MAP, read, value = HID_REPORT_MAP)]
     report_map: [u8; 65],
 
-    // Dynamic Input Report where key modifier/scan bytes are dispatched
+    // Protocol Mode (0 = Boot, 1 = Report). Hosts read/write this to select the
+    // report protocol; without it many hosts refuse to enumerate the keyboard.
+    #[characteristic(uuid = "2A4E", read, write_without_response, value = 0x01)]
+    protocol_mode: u8,
+
+    // Dynamic Input Report where key modifier/scan bytes are dispatched.
+    // The Report Reference descriptor (0x2908) is REQUIRED: it tells the host
+    // that this characteristic carries Input report ID 1. Without it the host
+    // cannot map the report map's `REPORT_ID (1)` to this characteristic, so it
+    // never builds the HID keyboard (no "device connected" badge, no keystrokes).
     #[characteristic(uuid = characteristic::REPORT, read, notify)]
+    #[descriptor(uuid = "2908", read, value = [KEYBOARD_ID, 0x01])] // (Report ID, Type = Input)
     input_report: [u8; 8],
 
     // Required HID Control Point Handshake characteristic
@@ -136,31 +145,45 @@ struct HidService {
 }
 
 pub async fn serve_keyboard(mut channel: KeypressReceiver) -> ! {
+    info!("keyboard: task started");
     let stack = ble_stack().await;
     let mut host = stack.build();
     let server = Server::new_with_config(GapConfig::Peripheral(PeripheralConfig {
         name: "ESP32-C3 Joy KB",
         appearance: &appearance::human_interface_device::KEYBOARD,
     }))
-    .unwrap();
+        .unwrap();
+
+    let ble_state = BLE_CONNECTED.sender();
 
     join(ble_task(host.runner), async {
         loop {
             match advertise("ESP32-C3 Joystick Keyboard", &mut host.peripheral, &server).await {
                 Ok(conn) => {
-                    // run until task ends (usually because the connection has been closed),
-                    // then return to advertising state.
-                    select(custom_task(&server, &conn, &mut channel), gatt_events_task(&server, &conn)).await;
+                    info!("[connection] established!");
+                    ble_state.send(true);
+
+                    // Execute both internal loops concurrently using join.
+                    // This keeps both loops alive without canceling either future mid-transaction.
+                    join(
+                        custom_task(&server, &conn, &mut channel),
+                        gatt_events_task(&server, &conn)
+                    ).await;
+
+                    // Connection dropped: release the radio back to Wi-Fi.
+                    ble_state.send(false);
+                    info!("[connection] loop exited, ready to advertise again");
+                    Timer::after(Duration::from_millis(200)).await;
                 }
                 Err(e) => {
                     warn!("[adv] error: {:?}", e);
-                    Timer::after(Duration::from_secs(100000)).await;
+                    Timer::after(Duration::from_secs(2)).await;
                 }
             }
         }
     })
-    .await
-    .0
+        .await
+        .0
 }
 
 async fn custom_task<P: PacketPool>(
@@ -180,7 +203,9 @@ async fn custom_task<P: PacketPool>(
                     report[2] = keystroke.keycode;
                 }
             }
-            Keypress::Released(_ch) => {}
+            Keypress::Released(_ch) => {
+                report = [0u8; 8]; // Clear report on release
+            }
         }
 
         if server
@@ -190,19 +215,14 @@ async fn custom_task<P: PacketPool>(
             .await
             .is_err()
         {
-            info!("[custom_task] error notifying connection");
-            break
+            info!("[custom_task] error notifying connection or client not subscribed yet");
+            Timer::after(Duration::from_millis(50)).await;
         }
     }
 }
 
 /// Stream Events until the connection closes.
-///
-/// This function will handle the GATT events and process them.
-/// This is how we interact with read and write requests.
 async fn gatt_events_task(server: &Server<'_>, conn: &GattConnection<'_, '_, DefaultPacketPool>) -> Result<Option<Status>, Error> {
-    let level = server.hid_service.input_report;
-
     loop {
         let event = conn.next().await;
         match event {
@@ -215,22 +235,40 @@ async fn gatt_events_task(server: &Server<'_>, conn: &GattConnection<'_, '_, Def
             }
             GattConnectionEvent::PassKeyInput => {
                 info!("[gatt] passkey input");
-                // Normally fetched from the user
                 conn.pass_key_input(1234)?;
             }
             GattConnectionEvent::Gatt { event } => {
-                let reply_result = event.accept();
-                match reply_result {
-                    Ok(reply) => reply.send().await,
-                    Err(e) => warn!("[gatt] error sending response: {:?}", e),
+                match event {
+                    GattEvent::Read(e) => {
+                        info!("[gatt] handling ReadEvent");
+                        match e.accept() {
+                            Ok(reply) => { reply.send().await; }
+                            Err(err) => warn!("[gatt] error creating read reply: {:?}", err),
+                        }
+                    }
+                    GattEvent::Write(e) => {
+                        info!("[gatt] handling WriteEvent");
+                        match e.accept() {
+                            Ok(reply) => { reply.send().await; }
+                            Err(err) => warn!("[gatt] error creating write reply: {:?}", err),
+                        }
+                    }
+                    other_gatt_event => {
+                        // Catch-all for NotAllowed or structural events
+                        info!("[gatt] handling other structural event");
+                        match other_gatt_event.accept() {
+                            Ok(reply) => { reply.send().await; }
+                            Err(err) => warn!("[gatt] error accepting structural event: {:?}", err),
+                        }
+                    }
                 }
             }
-            _ => {} // ignore other Gatt Connection Events
+            _ => {}
         };
     }
 }
 
-/// This is a background task required to run forever alongside any other BLE tasks.
+/// Background task required to run forever alongside any other BLE tasks.
 async fn ble_task<C: Controller, P: PacketPool>(mut runner: Runner<'_, C, P>) -> ! {
     loop {
         if let Err(e) = runner.run().await {
@@ -314,8 +352,8 @@ const ASCII_TO_HID: [(u8, u8); 128] = {
         let upper_ascii = (b'A' + i) as usize;
         let hid_code = 0x04 + i;
 
-        table[lower_ascii] = (MODIFIER_NONE, hid_code);
-        table[upper_ascii] = (MODIFIER_SHIFT, hid_code); // Uppercase needs Shift
+        table[upper_ascii] = (MODIFIER_NONE, hid_code);
+        table[lower_ascii] = (MODIFIER_SHIFT, hid_code); // Uppercase needs Shift, but it's swapped
         i += 1;
     }
 

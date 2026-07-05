@@ -1,7 +1,7 @@
 extern crate alloc;
 
 use crate::display::{DisplayTarget, debug_input};
-use crate::inter_task::{CoordinatesReceiver, MessageReceiver, TouchReceiver};
+use crate::inter_task::{CoordinatesReceiver, IpDisplayReceiver, MessageReceiver, TouchReceiver};
 use alloc::vec;
 use ariel_os::time::Timer;
 use ariel_os_hal::gpio::Output;
@@ -55,7 +55,7 @@ impl<'a, 'd> Display<'a, 'd> {
     pub async fn debug_input(
         &mut self,
         channel: CoordinatesReceiver,
-        address: MessageReceiver,
+        address: IpDisplayReceiver,
         touch: TouchReceiver,
     ) {
         debug_input(self, channel, address, touch).await

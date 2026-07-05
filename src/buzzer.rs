@@ -1,6 +1,6 @@
 use crate::inter_task::SoundReceiver;
 use crate::rainbow::RAINBOW_RGB_U8_32;
-use ariel_os::debug::log::warn;
+use ariel_os::debug::log::{info, warn};
 use ariel_os::time::Timer;
 use core::fmt::Display;
 use core::iter;
@@ -88,6 +88,7 @@ impl<'a, T: OutputPin, U: OutputPin> SoundLed<'a, T, U> {
     }
 
     pub async fn control(mut self, channel: SoundReceiver) {
+        info!("sound led: task started");
         let mut melody = None;
         let mut led = SmartLedsAdapter::new(self.rmt_channel, self.led_pin, &mut self.rmt_buffer);
         let mut buzzer = Buzzer::new(
@@ -114,6 +115,7 @@ impl<'a, T: OutputPin, U: OutputPin> SoundLed<'a, T, U> {
 }
 
 pub async fn buzz(pin: impl OutputPin, mut ledc: Ledc<'static>, channel: SoundReceiver) {
+    info!("buzz: task started");
     ledc.set_global_slow_clock(LSGlobalClkSource::APBClk);
     let mut buzzer = Buzzer::new(&ledc, timer::Number::Timer0, channel::Number::Channel1, pin);
     let mut melody = None;
@@ -135,7 +137,11 @@ async fn play(
     let Some(melody) = melody else {
         buzzer.mute();
         write_led!(led, 0);
-        Timer::after_ticks(u64::MAX / 2).await;
+        // Park forever. Do NOT use a far-future Timer here: a huge deadline can
+        // become the timer queue's minimum (when no shorter timers exist, e.g.
+        // BLE-only builds) and get armed into the 52-bit systimer, freezing the
+        // system. `pending()` never touches the time driver.
+        core::future::pending::<()>().await;
         return;
     };
 

@@ -3,7 +3,7 @@
 //! one does really transfer data while not blocking other tasks.
 
 use crate::display::{DisplayTarget, debug_input, print_text};
-use crate::inter_task::{CoordinatesReceiver, MessageReceiver};
+use crate::inter_task::{CoordinatesReceiver, IpDisplayReceiver, MessageReceiver, TouchReceiver};
 use ariel_os_hal::gpio::Output;
 use core::cell::RefCell;
 use embedded_graphics::draw_target::DrawTarget;
@@ -56,7 +56,7 @@ impl<'a, 'd, 's> Display<'a, 'd, 's> {
     pub async fn debug_input(
         &mut self,
         channel: CoordinatesReceiver,
-        address: MessageReceiver,
+        address: IpDisplayReceiver,
         touch: TouchReceiver,
     ) {
         debug_input(self, channel, address, touch).await

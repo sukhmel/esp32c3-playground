@@ -7,14 +7,13 @@ pub mod ili9341_async;
 
 use crate::input::{CHARSETS, value_to_percent};
 use crate::inter_task::{
-    CoordinatesReceiver, MESSAGE_SIZE, MessageReceiver, Reading, TouchReceiver,
+    CoordinatesReceiver, IpDisplayReceiver, MESSAGE_SIZE, MessageReceiver, Reading, TouchReceiver,
 };
 use crate::rainbow::{RAINBOW_RGB565_128, RAINBOW_RGB565_256, rgb565_rainbow};
 use crate::touch::TouchInputResponse;
 use ariel_os::debug::log::{info, warn};
 use ariel_os::time::{Duration, Instant, Timer};
 use core::fmt::Debug;
-use ariel_os::debug::println;
 use embassy_futures::select::{Either, select};
 use embedded_graphics::pixelcolor::Rgb565;
 use embedded_graphics::pixelcolor::raw::RawU16;
@@ -104,9 +103,10 @@ where
 pub async fn debug_input<T: DisplayTarget>(
     display: &mut T,
     channel: CoordinatesReceiver,
-    address: MessageReceiver,
+    mut address: IpDisplayReceiver,
     touch: TouchReceiver,
 ) {
+    info!("display: debug task started");
     let mut message = None;
     let mut frame_buffer_data = [Rgb565::RED; (320 * BAND_HEIGHT) as usize];
     let mut frame_buffer = FrameBuf::new(&mut frame_buffer_data, 320, BAND_HEIGHT as usize);
@@ -270,9 +270,9 @@ pub async fn debug_input<T: DisplayTarget>(
 
         let mut draw_band_3 = false;
 
-        if message.is_none()
-            && let Ok(line) = address.try_peek()
-        {
+        // Latest-value watch: redraw whenever the address changes, always showing
+        // the most recent value rather than a stale queued one.
+        if let Some(line) = address.try_changed() {
             let mut value = heapless::String::<22>::new();
             value
                 .push_str(
@@ -679,7 +679,8 @@ async fn rainbow_text<T: DrawTarget<Color = Rgb565>>(
     <T as DrawTarget>::Error: Debug,
 {
     let Some(text) = text else {
-        Timer::after_ticks(u64::MAX / 2).await;
+        // Park forever without arming a far-future hardware timer (see buzzer.rs).
+        core::future::pending::<()>().await;
         return;
     };
     display.clear(Rgb565::BLACK).unwrap();

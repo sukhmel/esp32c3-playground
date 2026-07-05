@@ -4,13 +4,21 @@ extern crate alloc;
 
 include!(concat!(env!("OUT_DIR"), "/secrets.rs"));
 
-use crate::buzzer::{Melody, SoundLed, buzz};
-use crate::inter_task::{CHAR_CHANNEL, COORDINATES_CHANNEL, KEYPRESS_CHANNEL, MESSAGE_CHANNEL, MESSAGE_SIZE, SOUND_CHANNEL, TOUCH_CHANNEL};
+#[cfg(feature = "wifi")]
+use crate::buzzer::Melody;
+use crate::buzzer::{SoundLed, buzz};
+use crate::inter_task::{COORDINATES_CHANNEL, IP_DISPLAY, KEYPRESS_CHANNEL, SOUND_CHANNEL, TOUCH_CHANNEL};
+#[cfg(feature = "wifi")]
+use crate::inter_task::{BLE_CONNECTED, CHAR_CHANNEL, MESSAGE_SIZE};
 use crate::pins::Peripherals;
 use crate::touch::Xpt2046TouchInput;
 use ariel_os::asynch::Spawner;
-use ariel_os::debug::log::{debug, error, info, warn};
+use ariel_os::debug::log::info;
+#[cfg(feature = "wifi")]
+use ariel_os::debug::log::{debug, error, warn};
+#[cfg(feature = "wifi")]
 use ariel_os::reexports::embassy_net::{IpListenEndpoint, Stack, tcp::TcpSocket};
+#[cfg(feature = "wifi")]
 use ariel_os::time::{Duration, Timer, with_timeout};
 use ariel_os_hal::gpio::{Level, Output};
 #[cfg(not(feature = "async_ili9341"))]
@@ -18,6 +26,8 @@ use core::cell::RefCell;
 use ariel_os::debug::println;
 use display::Display;
 use embassy_futures::join::{join5};
+#[cfg(feature = "wifi")]
+use embassy_futures::select::{select, Either};
 #[cfg(feature = "async_ili9341")]
 use embassy_sync::blocking_mutex::raw::NoopRawMutex;
 #[cfg(not(feature = "async_ili9341"))]
@@ -89,15 +99,15 @@ async fn ui(peripherals: Peripherals) {
     // let buzzer = SoundLed::new(peripherals.binary.pin19, ledc, peripherals.binary.pin8, rmt);
     info!("Starting join");
     let _ = join5(
+        serve_keyboard(KEYPRESS_CHANNEL.receiver()),
         display.debug_input(
             COORDINATES_CHANNEL.receiver(),
-            MESSAGE_CHANNEL.receiver(),
+            IP_DISPLAY.receiver().unwrap(),
             TOUCH_CHANNEL.receiver(),
         ),
         buzz(peripherals.binary.pin19, ledc, SOUND_CHANNEL.receiver()),
-        input::read_joystick(peripherals.analog),
         touch.run(),
-        serve_keyboard(KEYPRESS_CHANNEL.receiver())
+        input::read_joystick(peripherals.analog),
     )
     .await;
     info!("Finished UI");
@@ -108,6 +118,7 @@ async fn blast_sound<'a>(speaker: impl OutputPin, ledc: Ledc<'static>) {
     buzz(speaker, ledc, SOUND_CHANNEL.receiver()).await;
 }
 
+#[cfg(feature = "wifi")]
 #[ariel_os::task()]
 async fn network(spawner: Spawner) {
     info!(
@@ -127,7 +138,8 @@ async fn network(spawner: Spawner) {
         )
         .is_ok()
         {
-            MESSAGE_CHANNEL.send(channel_msg).await;
+            // Latest-value channel: always shows the current address, never blocks.
+            IP_DISPLAY.sender().send(channel_msg);
         } else {
             warn!("Failed to format message");
         }
@@ -140,6 +152,13 @@ async fn network(spawner: Spawner) {
     }
 }
 
+/// Resolves once the BLE connection state watch reports `target`.
+#[cfg(feature = "wifi")]
+async fn wait_for(ble: &mut inter_task::BleStateReceiver, target: bool) {
+    while ble.changed().await != target {}
+}
+
+#[cfg(feature = "wifi")]
 #[ariel_os::task(pool_size = 1)]
 async fn run_echo_server(stack: Stack<'static>) -> ! {
     let mut rx_buffer = [0; 64];
@@ -147,12 +166,38 @@ async fn run_echo_server(stack: Stack<'static>) -> ! {
     let mut echo_buffer = [0; 64];
 
     let mut socket = TcpSocket::new(stack, &mut rx_buffer, &mut tx_buffer);
+    let mut ble = BLE_CONNECTED.receiver().unwrap();
     info!("Server function started. Listening on port 8080...");
 
     loop {
+        // The ESP32-C3 has a single 2.4 GHz radio shared between Wi-Fi and BLE.
+        // While a BLE central is connected, stop serving TCP so we don't fight
+        // BLE for the radio: drop any pending socket and wait for BLE to release.
+        if ble.try_get() == Some(true) {
+            info!("BLE connected: TCP server standing down");
+            socket.abort();
+            let _ = socket.flush().await;
+            while ble.changed().await {} // returns the new value; exits when it flips to false
+            info!("BLE disconnected: TCP server resuming");
+        }
+
         debug!("creating socket");
         let mut begin = true;
-        match socket.accept(IpListenEndpoint::from(8080)).await {
+        // Race the accept against BLE becoming active so a connection mid-wait
+        // still makes us stand down promptly.
+        let accept = match select(
+            socket.accept(IpListenEndpoint::from(8080)),
+            wait_for(&mut ble, true),
+        )
+        .await
+        {
+            Either::First(result) => result,
+            Either::Second(()) => {
+                socket.abort();
+                continue;
+            }
+        };
+        match accept {
             Err(e) => {
                 error!("Failed to accept client: {:?}", e);
                 socket.abort();
@@ -252,10 +297,8 @@ async fn run_echo_server(stack: Stack<'static>) -> ! {
                             );
                         }
                     }
-                    // CHANNEL.send(channel_msg).await;
-                    if let Err(_) = MESSAGE_CHANNEL.try_send(channel_msg) {
-                        warn!("Channel full! Dropped message");
-                    }
+                    // Show the most recent line on screen (latest-value watch).
+                    IP_DISPLAY.sender().send(channel_msg);
                     if begin {
                         begin = false;
                         let mut header = heapless::String::<256>::new();
@@ -315,5 +358,8 @@ async fn run_echo_server(stack: Stack<'static>) -> ! {
 
 #[ariel_os::spawner(autostart)]
 fn main(spawner: Spawner) {
+    #[cfg(feature = "wifi")]
     spawner.spawn(network(spawner)).unwrap();
+    #[cfg(not(feature = "wifi"))]
+    let _ = spawner;
 }

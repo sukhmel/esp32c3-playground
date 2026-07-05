@@ -1,7 +1,7 @@
 //! Based on <https://github.com/lampaBiurkowa/esp32-ili9341-slint/blob/master/src/touch_input.rs>
 
 use crate::inter_task::TOUCH_CHANNEL;
-use ariel_os::debug::log::warn;
+use ariel_os::debug::log::{info, warn};
 use ariel_os::time::{Duration, Timer};
 use embassy_embedded_hal::shared_bus::asynch::spi::SpiDeviceWithConfig;
 use embassy_sync::blocking_mutex::raw::NoopRawMutex;
@@ -74,6 +74,7 @@ impl<'a> Xpt2046TouchInput<'a> {
     }
 
     pub(crate) async fn run(&mut self) -> Result<(), TouchInputError> {
+        info!("touch: task started");
         self.init().await?;
         loop {
             if let Ok(x) = self.get_input().await {

@@ -1,6 +1,6 @@
 use crate::inter_task::{CHAR_CHANNEL, COORDINATES_CHANNEL, Reading, KEYPRESS_CHANNEL, Keypress};
 use crate::pins::AnalogPeripherals;
-use ariel_os::debug::log::{debug, warn};
+use ariel_os::debug::log::{debug, info, warn};
 use ariel_os::time::{Instant, Timer};
 use esp_hal::analog::adc::{Adc, AdcConfig, Attenuation};
 
@@ -42,6 +42,7 @@ macro_rules! value_to_percent {
 pub(crate) use value_to_percent;
 
 pub async fn read_joystick(peripherals: AnalogPeripherals) {
+    info!("input: task started");
     let mut min_v = DEFAULT_MIN_V;
     let mut max_v = DEFAULT_MAX_V;
     let mut adc1_config = AdcConfig::new();
@@ -104,11 +105,7 @@ pub async fn read_joystick(peripherals: AnalogPeripherals) {
             };
             match keypress {
                 None => {
-                    debug!("Key pressed: {}", char);
-                    if CHAR_CHANNEL.try_send(char).is_err() {
-                        warn!("Failed to send keypress");
-                    }
-                    let _ = KEYPRESS_CHANNEL.try_send(Keypress::Pressed(char));
+                    debug!("Key stored: {}", char);
                     keypress = Some(char);
                     keypress_cycle = 0;
                 }
@@ -116,7 +113,7 @@ pub async fn read_joystick(peripherals: AnalogPeripherals) {
                     debug!("Key released: {}", prev_char);
                     debug!("Key pressed: {}", char);
                     if CHAR_CHANNEL.try_send(char).is_err() {
-                        warn!("Failed to send keypress");
+                        debug!("Failed to send keypress");
                     }
                     let _ = KEYPRESS_CHANNEL.try_send(Keypress::Released(prev_char));
                     let _ = KEYPRESS_CHANNEL.try_send(Keypress::Pressed(char));
@@ -125,10 +122,10 @@ pub async fn read_joystick(peripherals: AnalogPeripherals) {
                 }
                 Some(char) => {
                     keypress_cycle += 1;
-                    if keypress_cycle > 5 && keypress_cycle % 2 == 0 {
-                        debug!("Key repeated: {}", char);
+                    if keypress_cycle == 2 || keypress_cycle > 9 && keypress_cycle % 3 == 0 {
+                        debug!("Key pressed: {}", char);
                         if CHAR_CHANNEL.try_send(char).is_err() {
-                            warn!("Failed to send keypress");
+                            debug!("Failed to send keypress");
                         }
                         let _ = KEYPRESS_CHANNEL.try_send(Keypress::Pressed(char));
                     }
