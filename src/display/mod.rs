@@ -50,6 +50,9 @@ static POSITION_PAD_DIAMETER: usize = 240usize
     .checked_sub(4 * (BAND_HEIGHT + 1) as usize)
     .unwrap();
 
+/// Two pads side by side with a 10 px gap; columns right of this never change.
+static POSITION_PAD_AREA_WIDTH: u32 = POSITION_PAD_DIAMETER as u32 * 2 + 10;
+
 fn rainbow_at(length: usize, step: usize) -> Rgb565 {
     let step = step % length;
 
@@ -233,17 +236,31 @@ pub async fn debug_input<T: DisplayTarget>(
             for y in (0..POSITION_PAD_DIAMETER).step_by(BAND_HEIGHT as usize) {
                 let y_offset = y as i32;
                 let height = BAND_HEIGHT.min((POSITION_PAD_DIAMETER - y) as i32) as u32;
+                // The visible stripe in pad-local coordinates: draw_position only
+                // rasterizes primitives that intersect it, instead of rasterizing
+                // the full pad four times and discarding out-of-stripe pixels.
+                let band = Rectangle::new(
+                    Point::new(0, y_offset),
+                    Size::new(POSITION_PAD_DIAMETER as u32, height),
+                );
                 let mut cropped = frame_buffer.cropped(&Rectangle::new(Point::new(0, 0), Size::new(320, height)));
                 let mut trans0 = cropped.translated(Point::new((POSITION_PAD_DIAMETER + 10) as i32, -y_offset));
-                draw_position(&mut trans0, current_coordinates.x_0, current_coordinates.y_0, current_coordinates.sel_x_0, current_coordinates.sel_y_0, current_coordinates.pressed, charset);
+                draw_position(&mut trans0, band, current_coordinates.x_0, current_coordinates.y_0, current_coordinates.sel_x_0, current_coordinates.sel_y_0, current_coordinates.pressed, charset);
                 let mut trans1 = cropped.translated(Point::new(0, -y_offset));
-                draw_position(&mut trans1, current_coordinates.x_1, current_coordinates.y_1, current_coordinates.sel_x_1, current_coordinates.sel_y_1, false, "");
+                draw_position(&mut trans1, band, current_coordinates.x_1, current_coordinates.y_1, current_coordinates.sel_x_1, current_coordinates.sel_y_1, false, "");
 
+                // Only the pads' columns change; sending 242-wide rows instead of
+                // the buffer's full 320 saves ~25% of the transfer. The iterator
+                // must clip each backing row so rows stay aligned with the
+                // narrower window.
                 display
                     .draw(
                         Point::new(0, (BAND_HEIGHT + 1) * 4 + y_offset),
-                        Size::new(320, height),
-                        frame_buffer.data.iter().copied(),
+                        Size::new(POSITION_PAD_AREA_WIDTH, height),
+                        frame_buffer
+                            .data
+                            .chunks(320)
+                            .flat_map(|row| row[..POSITION_PAD_AREA_WIDTH as usize].iter().copied()),
                     )
                     .await
                     .unwrap();
@@ -345,8 +362,11 @@ fn draw_touch_buffer<T: DrawTarget<Color = Rgb565>>(
     }
 }
 
+/// Draw the part of a position pad that intersects the frame buffer future draw location.
+#[allow(clippy::too_many_arguments)]
 fn draw_position<T: DrawTarget<Color = Rgb565>>(
     display: &mut T,
+    band: Rectangle,
     x: f32,
     y: f32,
     selector_x: i8,
@@ -360,6 +380,28 @@ fn draw_position<T: DrawTarget<Color = Rgb565>>(
     let diameter = POSITION_PAD_DIAMETER as i32;
     let margin = (POSITION_PAD_DIAMETER as f32 * 0.05) as i32;
     let x_0 = 0;
+    let band_y0 = band.top_left.y;
+    let band_y1 = band_y0 + band.size.height as i32;
+    // Does the half-open row range [top, bottom) intersect the band?
+    let rows_visible = |top: i32, bottom: i32| bottom > band_y0 && top < band_y1;
+
+    Rectangle::new(
+        Point::new(x_0, y_0),
+        Size::new(diameter as u32, diameter as u32),
+    )
+    .intersection(&band)
+    .into_styled(
+        PrimitiveStyleBuilder::new()
+            .fill_color(if charset.len() > 0 {
+                Rgb565::CSS_LIGHT_SALMON
+            } else {
+                Rgb565::CSS_ORANGE_RED
+            })
+            .build(),
+    )
+    .draw(display)
+    .unwrap();
+
     Rectangle::new(
         Point::new(x_0, y_0),
         Size::new(diameter as u32, diameter as u32),
@@ -367,11 +409,6 @@ fn draw_position<T: DrawTarget<Color = Rgb565>>(
     .into_styled(
         PrimitiveStyleBuilder::new()
             .stroke_width(1)
-            .fill_color(if charset.len() > 0 {
-                Rgb565::CSS_LIGHT_SALMON
-            } else {
-                Rgb565::CSS_ORANGE_RED
-            })
             .stroke_color(Rgb565::BLACK)
             .build(),
     )
@@ -384,6 +421,7 @@ fn draw_position<T: DrawTarget<Color = Rgb565>>(
             (diameter - margin * 2) as u32,
         ),
     )
+    .intersection(&band)
     .into_styled(
         PrimitiveStyleBuilder::new()
             .fill_color(Rgb565::CSS_ORANGE_RED)
@@ -392,44 +430,48 @@ fn draw_position<T: DrawTarget<Color = Rgb565>>(
     .draw(display)
     .unwrap();
 
-    let border = if charset.len() > 0 && pressed { 3 } else { 1 };
-    Rectangle::new(
-        Point::new(
-            x_0 + diameter / 3 * selector_x as i32,
-            y_0 + diameter / 3 * selector_y as i32,
-        ),
-        Size::new(diameter as u32 / 3, diameter as u32 / 3),
-    )
-    .into_styled(
-        PrimitiveStyleBuilder::new()
-            .stroke_width(border)
-            .stroke_color(Rgb565::CSS_ORANGE)
-            .build(),
-    )
-    .draw(display)
-    .unwrap();
-    Circle::new(
-        Point::new(
-            x_0 + (x * diameter as f32) as i32,
-            y_0 + ((1.0 - y) * diameter as f32) as i32,
-        ),
-        4,
-    )
-    .into_styled(
-        PrimitiveStyleBuilder::new()
-            .stroke_width(1)
-            .stroke_color(Rgb565::BLACK)
-            .fill_color(Rgb565::WHITE)
-            .build(),
-    )
-    .draw(display)
-    .unwrap();
+    let border: i32 = if charset.len() > 0 && pressed { 3 } else { 1 };
+    let selector_top = y_0 + diameter / 3 * selector_y as i32;
+    if rows_visible(selector_top - border, selector_top + diameter / 3 + border) {
+        Rectangle::new(
+            Point::new(x_0 + diameter / 3 * selector_x as i32, selector_top),
+            Size::new(diameter as u32 / 3, diameter as u32 / 3),
+        )
+        .into_styled(
+            PrimitiveStyleBuilder::new()
+                .stroke_width(border as u32)
+                .stroke_color(Rgb565::CSS_ORANGE)
+                .build(),
+        )
+        .draw(display)
+        .unwrap();
+    }
+    let dot_top = y_0 + ((1.0 - y) * diameter as f32) as i32;
+    if rows_visible(dot_top - 1, dot_top + 6) {
+        Circle::new(
+            Point::new(x_0 + (x * diameter as f32) as i32, dot_top),
+            4,
+        )
+        .into_styled(
+            PrimitiveStyleBuilder::new()
+                .stroke_width(1)
+                .stroke_color(Rgb565::BLACK)
+                .fill_color(Rgb565::WHITE)
+                .build(),
+        )
+        .draw(display)
+        .unwrap();
+    }
     let mut char = heapless::String::<4>::new();
     if charset.len() == 0 {
         for x in 0..3 {
             for y in 0..3 {
                 let x_pos = x_0 + diameter / 3 * x + 7;
                 let y_pos = y_0 + diameter / 3 * y + 12;
+                // The cell's three text rows span roughly [y_pos - 10, y_pos + 30).
+                if !rows_visible(y_pos - 10, y_pos + 30) {
+                    continue;
+                }
 
                 for (index, ch) in CHARSETS[(x + 3 * y) as usize].chars().enumerate() {
                     let index = if index < 4 {
@@ -437,6 +479,10 @@ fn draw_position<T: DrawTarget<Color = Rgb565>>(
                     } else {
                         index as i32 + 1
                     };
+                    let text_y = y_pos + 10 * (index / 3);
+                    if !rows_visible(text_y - 10, text_y + 4) {
+                        continue;
+                    }
                     if let Err(_) = core::fmt::write(&mut char, format_args!("{}", ch)) {
                         warn!("Failed to write char: {}", ch);
                         char.clear();
@@ -444,7 +490,7 @@ fn draw_position<T: DrawTarget<Color = Rgb565>>(
                     }
                     Text::new(
                         &char,
-                        Point::new(x_pos + 10 * (index % 3), y_pos + 10 * (index / 3)),
+                        Point::new(x_pos + 10 * (index % 3), text_y),
                         MonoTextStyle::new(&FONT_6X10, Rgb565::BLACK),
                     )
                     .draw(display)
@@ -462,6 +508,9 @@ fn draw_position<T: DrawTarget<Color = Rgb565>>(
         };
         let x_pos = x_0 + diameter / 3 * (index % 3) + diameter / 6 - 5;
         let y_pos = y_0 + diameter / 3 * (index / 3) + diameter / 6 + 4;
+        if !rows_visible(y_pos - 20, y_pos + 6) {
+            continue;
+        }
         if let Err(_) = core::fmt::write(&mut char, format_args!("{}", ch)) {
             warn!("Failed to write char: {}", ch);
             char.clear();

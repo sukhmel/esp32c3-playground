@@ -164,9 +164,11 @@ dependencies = [
  "ariel-os-random",
  "ariel-os-rt",
  "ariel-os-utils",
+ "bt-hci",
  "cfg-if",
  "critical-section",
  "embassy-executor",
+ "embassy-sync 0.7.2",
  "embassy-time",
  "embassy-time-driver",
  "embassy-time-queue-utils",
@@ -181,6 +183,7 @@ dependencies = [
  "esp-sync",
  "paste",
  "static_cell",
+ "trouble-host",
 ]
 
 [[package]]
@@ -291,11 +294,18 @@ dependencies = [
  "ariel-os-embassy-common",
  "ariel-os-random",
  "ariel-os-utils",
+ "bt-hci",
  "cfg-if",
+ "cyw43",
+ "cyw43-pio",
  "embassy-executor",
+ "embassy-net-driver-channel",
  "embassy-rp",
+ "embassy-sync 0.7.2",
  "embedded-hal-async",
  "paste",
+ "static_cell",
+ "trouble-host",
 ]
 
 [[package]]
@@ -768,6 +778,36 @@ checksum = "78c8292055d1c1df0cce5d180393dc8cce0abec0a7102adb6c7b1eef6016d60a"
 dependencies = [
  "generic-array",
  "typenum",
+]
+
+[[package]]
+name = "cyw43"
+version = "0.5.0"
+source = "git+https://github.com/ariel-os/embassy?rev=603583d9#603583d94cb7ba14b3a6bbb84c8c5fea8bffea0d"
+dependencies = [
+ "bt-hci",
+ "cortex-m",
+ "cortex-m-rt",
+ "embassy-futures",
+ "embassy-net-driver-channel",
+ "embassy-sync 0.7.2",
+ "embassy-time",
+ "embedded-hal 1.0.0",
+ "embedded-io-async 0.6.1",
+ "futures",
+ "heapless 0.8.0",
+ "num_enum 0.5.11",
+]
+
+[[package]]
+name = "cyw43-pio"
+version = "0.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "86bd7dea4d32a73557be29bfadaaa916e758115ed8b42cfca4fda0a111f07644"
+dependencies = [
+ "cyw43",
+ "embassy-rp",
+ "fixed",
 ]
 
 [[package]]
@@ -1704,6 +1744,7 @@ version = "0.17.0"
 source = "git+https://github.com/ariel-os/esp-hal?rev=531c629afdd80ea464682ce7f4db8baed97967a6#531c629afdd80ea464682ce7f4db8baed97967a6"
 dependencies = [
  "allocator-api2",
+ "bt-hci",
  "cfg-if",
  "critical-section",
  "document-features",
@@ -1868,7 +1909,7 @@ dependencies = [
  "libm",
  "mipidsi",
  "nb 1.1.0",
- "num_enum",
+ "num_enum 0.7.6",
  "sky-ili9341",
  "smart-leds",
  "static_cell",
@@ -2049,6 +2090,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "futures-macro"
+version = "0.3.32"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e835b70203e41293343137df5c0664546da5745f82ec9b84d40be8336958447b"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.118",
+]
+
+[[package]]
 name = "futures-sink"
 version = "0.3.32"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2067,6 +2119,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "389ca41296e6190b48053de0321d02a77f32f8a5d2461dd38762c0593805c6d6"
 dependencies = [
  "futures-core",
+ "futures-macro",
  "futures-sink",
  "futures-task",
  "pin-project-lite",
@@ -2586,12 +2639,32 @@ dependencies = [
 
 [[package]]
 name = "num_enum"
+version = "0.5.11"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1f646caf906c20226733ed5b1374287eb97e3c2a5c227ce668c1f2ce20ae57c9"
+dependencies = [
+ "num_enum_derive 0.5.11",
+]
+
+[[package]]
+name = "num_enum"
 version = "0.7.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5d0bca838442ec211fa11de3a8b0e0e8f3a4522575b5c4c06ed722e005036f26"
 dependencies = [
- "num_enum_derive",
+ "num_enum_derive 0.7.6",
  "rustversion",
+]
+
+[[package]]
+name = "num_enum_derive"
+version = "0.5.11"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "dcbff9bc912032c62bf65ef1d5aea88983b420f4f839db1e9b0c281a25c9c799"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 1.0.109",
 ]
 
 [[package]]
@@ -2757,7 +2830,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "61d90fddc3d67f21bbf93683bc461b05d6a29c708caf3ffb79947d7ff7095406"
 dependencies = [
  "arrayvec",
- "num_enum",
+ "num_enum 0.7.6",
  "paste",
 ]
 
@@ -3925,11 +3998,6 @@ name = "zeroize"
 version = "1.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e13c156562582aa81c60cb29407084cdb54c4164760106ab78e6c5b0858cf64e"
-
-[[patch.unused]]
-name = "cyw43"
-version = "0.5.0"
-source = "git+https://github.com/ariel-os/embassy?rev=603583d9#603583d94cb7ba14b3a6bbb84c8c5fea8bffea0d"
 
 [[patch.unused]]
 name = "embassy-time"

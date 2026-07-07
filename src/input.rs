@@ -111,12 +111,8 @@ pub async fn read_joystick(peripherals: AnalogPeripherals) {
                 }
                 Some(prev_char) if char != prev_char => {
                     debug!("Key released: {}", prev_char);
-                    debug!("Key pressed: {}", char);
-                    if CHAR_CHANNEL.try_send(char).is_err() {
-                        debug!("Failed to send keypress");
-                    }
+                    debug!("Key stored: {}", char);
                     let _ = KEYPRESS_CHANNEL.try_send(Keypress::Released(prev_char));
-                    let _ = KEYPRESS_CHANNEL.try_send(Keypress::Pressed(char));
                     keypress = Some(char);
                     keypress_cycle = 0;
                 }

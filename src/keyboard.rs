@@ -5,7 +5,13 @@ use ariel_os::ble::ble_stack;
 use ariel_os::debug::log::{info, warn};
 use ariel_os::time::{Duration, Timer};
 use bt_hci::param::Status;
+use bt_hci::cmd::le::{LeConnUpdate, LeReadLocalSupportedFeatures};
+use bt_hci::controller::{ControllerCmdAsync, ControllerCmdSync};
 use embassy_futures::join::join;
+use embassy_futures::select::{Either, select};
+use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
+use embassy_sync::signal::Signal;
+use trouble_host::Stack;
 use trouble_host::prelude::*;
 
 macro_rules! count {
@@ -144,6 +150,21 @@ struct HidService {
     control_point: u8,
 }
 
+/// Connection parameters as confirmed by the central.
+#[derive(Copy, Clone)]
+struct NegotiatedParams {
+    interval_ms: u32,
+    latency: u16,
+    timeout_ms: u32,
+}
+
+/// Fired by `gatt_events_task` whenever the link layer completes a connection
+/// parameter update. `request_conn_params` waits on it to learn whether a
+/// request was accepted — trouble-host reports a *rejection* only via an
+/// internal warning (no event), so the absence of this signal within a timeout
+/// is how we detect that the central refused.
+static CONN_PARAMS_ACK: Signal<CriticalSectionRawMutex, NegotiatedParams> = Signal::new();
+
 pub async fn serve_keyboard(mut channel: KeypressReceiver) -> ! {
     info!("keyboard: task started");
     let stack = ble_stack().await;
@@ -163,11 +184,29 @@ pub async fn serve_keyboard(mut channel: KeypressReceiver) -> ! {
                     info!("[connection] established!");
                     ble_state.send(true);
 
-                    // Execute both internal loops concurrently using join.
-                    // This keeps both loops alive without canceling either future mid-transaction.
-                    join(
-                        custom_task(&server, &conn, &mut channel),
-                        gatt_events_task(&server, &conn)
+                    // Mark the link bondable BEFORE the central starts pairing.
+                    // Without this the SMP negotiates "NoBonding", so: the peer
+                    // never distributes its IRK (can't resolve its rotating
+                    // random address later) and, crucially, trouble drops the
+                    // bond on disconnect (it only keeps `is_bonded` bonds). The
+                    // result is the "no long term key" / Authentication Failure
+                    // loop after the peer reconnects. Bonding keeps the LTK +
+                    // IRK in RAM for this power cycle (Ariel OS has no bond
+                    // persistence yet, so it is lost on reboot — re-pair then).
+                    if let Err(e) = conn.raw().set_bondable(true) {
+                        warn!("[connection] could not set bondable: {:?}", e);
+                    }
+
+                    // Drop keypresses queued while nobody was connected, to not replay stale ones.
+                    while channel.try_receive().is_ok() {}
+
+                    // Run the connection loops until the link drops.
+                    select(
+                        gatt_events_task(&server, &conn),
+                        join(
+                            custom_task(&server, &conn, &mut channel),
+                            request_conn_params(&conn, &*stack),
+                        ),
                     ).await;
 
                     // Connection dropped: release the radio back to Wi-Fi.
@@ -184,6 +223,73 @@ pub async fn serve_keyboard(mut channel: KeypressReceiver) -> ! {
     })
         .await
         .0
+}
+
+/// Ask the central for a relaxed connection interval to leave more time for a display task.
+///
+/// Runs once per connection, after a short delay to let pairing/encryption finish.
+async fn request_conn_params<C, P: PacketPool>(
+    conn: &GattConnection<'_, '_, P>,
+    stack: &Stack<'_, C, P>,
+) where
+    C: ControllerCmdAsync<LeConnUpdate> + ControllerCmdSync<LeReadLocalSupportedFeatures>,
+{
+    // Delay so pairing/encryption settles first; centrals commonly reject
+    // parameter requests sent too early.
+    Timer::after(Duration::from_secs(2)).await;
+
+    // Candidates ordered from most-relaxed to least. We stop at the first one the central
+    // accepts, so we always end up with the largest interval it will allow.
+    const CANDIDATES: [(u64, u64, u16); 4] = [
+        (50, 100, 9),
+        (40, 75, 9),
+        (30, 50, 9),
+        (20, 40, 9),
+    ];
+
+    for (attempt, &(min_ms, max_ms, latency)) in CANDIDATES.iter().enumerate() {
+        // Clear any stale/previous confirmation before issuing this request.
+        CONN_PARAMS_ACK.reset();
+
+        let params = ConnectParams {
+            min_connection_interval: Duration::from_millis(min_ms),
+            max_connection_interval: Duration::from_millis(max_ms),
+            max_latency: latency,
+            ..Default::default()
+        };
+        info!(
+            "[conn] requesting interval {}-{} ms, latency {} (attempt {}/{})",
+            min_ms,
+            max_ms,
+            latency,
+            attempt + 1,
+            CANDIDATES.len()
+        );
+
+        // `update_connection_params` returns once the command is accepted
+        // locally; the actual accept/reject from the central arrives later as an
+        // LL update-complete event. Success surfaces via CONN_PARAMS_ACK; a
+        // rejection surfaces as nothing at all, so treat a timeout as failure.
+        if conn.raw().update_connection_params(stack, &params).await.is_err() {
+            warn!("[conn] controller rejected the request; trying a smaller interval");
+            continue;
+        }
+
+        match select(Timer::after(Duration::from_secs(3)), CONN_PARAMS_ACK.wait()).await {
+            Either::Second(p) => {
+                info!(
+                    "[conn] central accepted: interval {} ms, latency {}, timeout {} ms",
+                    p.interval_ms, p.latency, p.timeout_ms
+                );
+                return;
+            }
+            Either::First(()) => {
+                warn!("[conn] no confirmation (central refused?); trying a smaller interval");
+            }
+        }
+    }
+
+    warn!("[conn] could not negotiate a relaxed connection interval; keeping the central's default");
 }
 
 async fn custom_task<P: PacketPool>(
@@ -227,8 +333,38 @@ async fn gatt_events_task(server: &Server<'_>, conn: &GattConnection<'_, '_, Def
         let event = conn.next().await;
         match event {
             GattConnectionEvent::Disconnected { reason } => return Ok(Some(reason)),
-            GattConnectionEvent::PairingComplete { security_level, .. } => {
-                info!("[gatt] pairing complete: {:?}", security_level);
+            GattConnectionEvent::PairingComplete { security_level, bond } => {
+                match bond {
+                    // `is_bonded` true means the bond survives disconnect (kept
+                    // in RAM this power cycle); an IRK means the peer's rotating
+                    // random address can be resolved on reconnect.
+                    Some(b) => info!(
+                        "[gatt] pairing complete: {:?}, bonded={}, irk={}",
+                        security_level,
+                        b.is_bonded,
+                        b.identity.irk.is_some()
+                    ),
+                    None => info!(
+                        "[gatt] pairing complete: {:?}, no bond stored",
+                        security_level
+                    ),
+                }
+            }
+            GattConnectionEvent::ConnectionParamsUpdated {
+                conn_interval,
+                peripheral_latency,
+                supervision_timeout,
+            } => {
+                let params = NegotiatedParams {
+                    interval_ms: conn_interval.as_millis() as u32,
+                    latency: peripheral_latency,
+                    timeout_ms: supervision_timeout.as_millis() as u32,
+                };
+                info!(
+                    "[conn] parameters now in effect: interval {} ms, latency {}, timeout {} ms",
+                    params.interval_ms, params.latency, params.timeout_ms
+                );
+                CONN_PARAMS_ACK.signal(params);
             }
             GattConnectionEvent::PairingFailed(err) => {
                 warn!("[gatt] pairing error: {:?}", err);

@@ -7,7 +7,9 @@ include!(concat!(env!("OUT_DIR"), "/secrets.rs"));
 #[cfg(feature = "wifi")]
 use crate::buzzer::Melody;
 use crate::buzzer::{SoundLed, buzz};
-use crate::inter_task::{COORDINATES_CHANNEL, IP_DISPLAY, KEYPRESS_CHANNEL, SOUND_CHANNEL, TOUCH_CHANNEL};
+use crate::inter_task::{COORDINATES_CHANNEL, IP_DISPLAY, SOUND_CHANNEL, TOUCH_CHANNEL};
+#[cfg(feature = "ble")]
+use crate::inter_task::KEYPRESS_CHANNEL;
 #[cfg(feature = "wifi")]
 use crate::inter_task::{BLE_CONNECTED, CHAR_CHANNEL, MESSAGE_SIZE};
 use crate::pins::Peripherals;
@@ -38,12 +40,14 @@ use esp_hal::gpio::OutputPin;
 use esp_hal::ledc::Ledc;
 use esp_hal::spi::master::{Config, Spi};
 use esp_hal::time::Rate;
+#[cfg(feature = "ble")]
 use crate::keyboard::serve_keyboard;
 
 mod buzzer;
 mod display;
 mod input;
 pub mod inter_task;
+#[cfg(feature = "ble")]
 mod keyboard;
 mod led;
 pub mod pins;
@@ -98,8 +102,14 @@ async fn ui(peripherals: Peripherals) {
     // let rmt = Rmt::new(peripherals.binary.rmt, Rate::from_mhz(80)).unwrap();
     // let buzzer = SoundLed::new(peripherals.binary.pin19, ledc, peripherals.binary.pin8, rmt);
     info!("Starting join");
+    #[cfg(feature = "ble")]
+    let keyboard = serve_keyboard(KEYPRESS_CHANNEL.receiver());
+    // Keep the join arity stable without BLE; pending() never resolves and
+    // never touches the time driver.
+    #[cfg(not(feature = "ble"))]
+    let keyboard = core::future::pending::<()>();
     let _ = join5(
-        serve_keyboard(KEYPRESS_CHANNEL.receiver()),
+        keyboard,
         display.debug_input(
             COORDINATES_CHANNEL.receiver(),
             IP_DISPLAY.receiver().unwrap(),

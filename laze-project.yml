@@ -19,11 +19,16 @@ apps:
           # already borrowed")
           - "CONFIG_EXECUTOR_STACKSIZE=16384"
           - "CONFIG_HEAPSIZE=150000"
+          # esp-radio's btController/wifi tasks request priority 29 and get
+          # clamped to the scheduler max (15), preempting the executor (default
+          # priority 8) mid-rendering. Running the executor at higher priority
+          # helps a bit.
+          - "CONFIG_EXECUTOR_THREAD_PRIORITY=14"
 
         # does not work
 #         - "ESPFLASH_PARTITION_TABLE=partitions.csv"
 #        - "CONFIG_PARTITION_TABLE_SINGLE_APP_LARGE=y"
-        # this is only necessary for async display driver, since it can't draw without buffer
+#       I took it from the doc for nimBLE, but it seems not needed when used with troBLE
 #        - "CONFIG_BT_ENABLED=y"
 #        - "CONFIG_BT_BLE_ENABLED=y"
 #        - "CONFIG_BT_BLUEDROID_ENABLED=n"
