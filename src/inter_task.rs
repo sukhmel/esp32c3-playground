@@ -29,16 +29,20 @@ pub const WATCH_CONSUMERS: usize = 2;
 /// Latest-value channel for the "IP:port" line shown on screen. Unlike a
 /// [`Channel`], a [`Watch`] keeps only the most recent value, so a slow display
 /// consumer can never make the producer block or drop the current address.
-pub type IpDisplayWatch = Watch<CriticalSectionRawMutex, heapless::String<MESSAGE_SIZE>, WATCH_CONSUMERS>;
-pub type IpDisplayReceiver =
-    WatchReceiver<'static, CriticalSectionRawMutex, heapless::String<MESSAGE_SIZE>, WATCH_CONSUMERS>;
+pub type IpDisplayWatch =
+    Watch<CriticalSectionRawMutex, heapless::String<MESSAGE_SIZE>, WATCH_CONSUMERS>;
+pub type IpDisplayReceiver = WatchReceiver<
+    'static,
+    CriticalSectionRawMutex,
+    heapless::String<MESSAGE_SIZE>,
+    WATCH_CONSUMERS,
+>;
 
 /// Latest-value channel carrying BLE connection state (`true` = a central is
 /// connected). The Wi-Fi side observes this to stand down while BLE is active,
 /// since the ESP32-C3 shares a single 2.4 GHz radio between Wi-Fi and BLE.
 pub type BleStateWatch = Watch<CriticalSectionRawMutex, bool, WATCH_CONSUMERS>;
-pub type BleStateReceiver =
-    WatchReceiver<'static, CriticalSectionRawMutex, bool, WATCH_CONSUMERS>;
+pub type BleStateReceiver = WatchReceiver<'static, CriticalSectionRawMutex, bool, WATCH_CONSUMERS>;
 
 pub const MESSAGE_SIZE: usize = 128;
 pub const CHANNEL_SIZE: usize = 2;

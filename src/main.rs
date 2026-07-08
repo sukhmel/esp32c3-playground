@@ -7,17 +7,20 @@ include!(concat!(env!("OUT_DIR"), "/secrets.rs"));
 #[cfg(feature = "wifi")]
 use crate::buzzer::Melody;
 use crate::buzzer::{SoundLed, buzz};
-use crate::inter_task::{COORDINATES_CHANNEL, IP_DISPLAY, SOUND_CHANNEL, TOUCH_CHANNEL};
 #[cfg(feature = "ble")]
 use crate::inter_task::KEYPRESS_CHANNEL;
 #[cfg(feature = "wifi")]
 use crate::inter_task::{BLE_CONNECTED, CHAR_CHANNEL, MESSAGE_SIZE};
+use crate::inter_task::{COORDINATES_CHANNEL, IP_DISPLAY, SOUND_CHANNEL, TOUCH_CHANNEL};
+#[cfg(feature = "ble")]
+use crate::keyboard::serve_keyboard;
 use crate::pins::Peripherals;
 use crate::touch::Xpt2046TouchInput;
 use ariel_os::asynch::Spawner;
 use ariel_os::debug::log::info;
 #[cfg(feature = "wifi")]
 use ariel_os::debug::log::{debug, error, warn};
+use ariel_os::debug::println;
 #[cfg(feature = "wifi")]
 use ariel_os::reexports::embassy_net::{IpListenEndpoint, Stack, tcp::TcpSocket};
 #[cfg(feature = "wifi")]
@@ -25,11 +28,10 @@ use ariel_os::time::{Duration, Timer, with_timeout};
 use ariel_os_hal::gpio::{Level, Output};
 #[cfg(not(feature = "async_ili9341"))]
 use core::cell::RefCell;
-use ariel_os::debug::println;
 use display::Display;
-use embassy_futures::join::{join5};
+use embassy_futures::join::join5;
 #[cfg(feature = "wifi")]
-use embassy_futures::select::{select, Either};
+use embassy_futures::select::{Either, select};
 #[cfg(feature = "async_ili9341")]
 use embassy_sync::blocking_mutex::raw::NoopRawMutex;
 #[cfg(not(feature = "async_ili9341"))]
@@ -40,8 +42,6 @@ use esp_hal::gpio::OutputPin;
 use esp_hal::ledc::Ledc;
 use esp_hal::spi::master::{Config, Spi};
 use esp_hal::time::Rate;
-#[cfg(feature = "ble")]
-use crate::keyboard::serve_keyboard;
 
 mod buzzer;
 mod display;

@@ -1,4 +1,4 @@
-use crate::inter_task::{CHAR_CHANNEL, COORDINATES_CHANNEL, Reading, KEYPRESS_CHANNEL, Keypress};
+use crate::inter_task::{CHAR_CHANNEL, COORDINATES_CHANNEL, KEYPRESS_CHANNEL, Keypress, Reading};
 use crate::pins::AnalogPeripherals;
 use ariel_os::debug::log::{debug, info, warn};
 use ariel_os::time::{Instant, Timer};
@@ -7,19 +7,32 @@ use esp_hal::analog::adc::{Adc, AdcConfig, Attenuation};
 static DEFAULT_MIN_V: u16 = 1620;
 static DEFAULT_MAX_V: u16 = 3860;
 
+// Characters that stand for special keys inside [`CHARSETS`]. Shared by the
+// display (draws a glyph, see `display::draw_special_glyph`) and the keyboard
+// (emits a keycode, see `keyboard::SPECIAL_KEYS`) so the two never disagree.
+pub const CH_TAB: char = '\t'; // 0x09
+pub const CH_ENTER: char = '\n'; // 0x0A
+pub const CH_BACKSPACE: char = '\u{8}'; // 0x08, i.e. \b
+pub const CH_ESCAPE: char = '\u{1b}'; // 0x1B, i.e. \e
+pub const CH_DELETE: char = '\u{7f}'; // Delete Forward
+pub const CH_LEFT_ARROW: char = '\u{2190}'; // ← Left Arrow
+pub const CH_RIGHT_ARROW: char = '\u{2192}'; // → Right Arrow
+pub const CH_UP_ARROW: char = '\u{2191}'; // ↑ Up Arrow
+pub const CH_DOWN_ARROW: char = '\u{2193}'; // ↓ Down Arrow
+
 // 0 1 2
 // 3 4 5
 // 6 7 8
 pub static CHARSETS: [&str; 9] = [
-    ",M._/[`]",
-    "RTYFGHCV",
-    "UIOJKLBN",
-    "{P}<>:'\"",
-    "QWEADZSX",
-    "12345678",
-    "90!@#$%^",
-    "(&)*-+=\\",
-    "[ ]{}|;~",
+    ",M._\u{1b}/[`]",
+    "RTYF↑GHCV",
+    "UIOJ\nKLBN",
+    "{P}<←>:'\"",
+    "QWEA DZSX",
+    "1234→5678",
+    "90!@\u{8}#$%^",
+    "(&)*↓-+=\\",
+    "[ ]{\t}|;~",
 ];
 
 macro_rules! value_to_percent {

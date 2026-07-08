@@ -1,12 +1,12 @@
 //! Parts taken from <https://github.com/bjoernQ/esp32c3-ble-hid>, parts from <https://github.com/embassy-rs/trouble/blob/trouble-host-v0.5.1/examples/apps/src/ble_bas_peripheral.rs>
 
-use crate::inter_task::{Keypress, KeypressReceiver, BLE_CONNECTED};
+use crate::inter_task::{BLE_CONNECTED, Keypress, KeypressReceiver};
 use ariel_os::ble::ble_stack;
 use ariel_os::debug::log::{info, warn};
 use ariel_os::time::{Duration, Timer};
-use bt_hci::param::Status;
 use bt_hci::cmd::le::{LeConnUpdate, LeReadLocalSupportedFeatures};
 use bt_hci::controller::{ControllerCmdAsync, ControllerCmdSync};
+use bt_hci::param::Status;
 use embassy_futures::join::join;
 use embassy_futures::select::{Either, select};
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
@@ -142,7 +142,8 @@ struct HidService {
     // cannot map the report map's `REPORT_ID (1)` to this characteristic, so it
     // never builds the HID keyboard (no "device connected" badge, no keystrokes).
     #[characteristic(uuid = characteristic::REPORT, read, notify)]
-    #[descriptor(uuid = "2908", read, value = [KEYBOARD_ID, 0x01])] // (Report ID, Type = Input)
+    #[descriptor(uuid = "2908", read, value = [KEYBOARD_ID, 0x01])]
+    // (Report ID, Type = Input)
     input_report: [u8; 8],
 
     // Required HID Control Point Handshake characteristic
@@ -173,7 +174,7 @@ pub async fn serve_keyboard(mut channel: KeypressReceiver) -> ! {
         name: "ESP32-C3 Joy KB",
         appearance: &appearance::human_interface_device::KEYBOARD,
     }))
-        .unwrap();
+    .unwrap();
 
     let ble_state = BLE_CONNECTED.sender();
 
@@ -207,7 +208,8 @@ pub async fn serve_keyboard(mut channel: KeypressReceiver) -> ! {
                             custom_task(&server, &conn, &mut channel),
                             request_conn_params(&conn, &*stack),
                         ),
-                    ).await;
+                    )
+                    .await;
 
                     // Connection dropped: release the radio back to Wi-Fi.
                     ble_state.send(false);
@@ -221,8 +223,8 @@ pub async fn serve_keyboard(mut channel: KeypressReceiver) -> ! {
             }
         }
     })
-        .await
-        .0
+    .await
+    .0
 }
 
 /// Ask the central for a relaxed connection interval to leave more time for a display task.
@@ -240,12 +242,7 @@ async fn request_conn_params<C, P: PacketPool>(
 
     // Candidates ordered from most-relaxed to least. We stop at the first one the central
     // accepts, so we always end up with the largest interval it will allow.
-    const CANDIDATES: [(u64, u64, u16); 4] = [
-        (50, 100, 9),
-        (40, 75, 9),
-        (30, 50, 9),
-        (20, 40, 9),
-    ];
+    const CANDIDATES: [(u64, u64, u16); 4] = [(50, 100, 9), (40, 75, 9), (30, 50, 9), (20, 40, 9)];
 
     for (attempt, &(min_ms, max_ms, latency)) in CANDIDATES.iter().enumerate() {
         // Clear any stale/previous confirmation before issuing this request.
@@ -270,7 +267,12 @@ async fn request_conn_params<C, P: PacketPool>(
         // locally; the actual accept/reject from the central arrives later as an
         // LL update-complete event. Success surfaces via CONN_PARAMS_ACK; a
         // rejection surfaces as nothing at all, so treat a timeout as failure.
-        if conn.raw().update_connection_params(stack, &params).await.is_err() {
+        if conn
+            .raw()
+            .update_connection_params(stack, &params)
+            .await
+            .is_err()
+        {
             warn!("[conn] controller rejected the request; trying a smaller interval");
             continue;
         }
@@ -289,7 +291,9 @@ async fn request_conn_params<C, P: PacketPool>(
         }
     }
 
-    warn!("[conn] could not negotiate a relaxed connection interval; keeping the central's default");
+    warn!(
+        "[conn] could not negotiate a relaxed connection interval; keeping the central's default"
+    );
 }
 
 async fn custom_task<P: PacketPool>(
@@ -328,12 +332,18 @@ async fn custom_task<P: PacketPool>(
 }
 
 /// Stream Events until the connection closes.
-async fn gatt_events_task(server: &Server<'_>, conn: &GattConnection<'_, '_, DefaultPacketPool>) -> Result<Option<Status>, Error> {
+async fn gatt_events_task(
+    server: &Server<'_>,
+    conn: &GattConnection<'_, '_, DefaultPacketPool>,
+) -> Result<Option<Status>, Error> {
     loop {
         let event = conn.next().await;
         match event {
             GattConnectionEvent::Disconnected { reason } => return Ok(Some(reason)),
-            GattConnectionEvent::PairingComplete { security_level, bond } => {
+            GattConnectionEvent::PairingComplete {
+                security_level,
+                bond,
+            } => {
                 match bond {
                     // `is_bonded` true means the bond survives disconnect (kept
                     // in RAM this power cycle); an IRK means the peer's rotating
@@ -378,14 +388,18 @@ async fn gatt_events_task(server: &Server<'_>, conn: &GattConnection<'_, '_, Def
                     GattEvent::Read(e) => {
                         info!("[gatt] handling ReadEvent");
                         match e.accept() {
-                            Ok(reply) => { reply.send().await; }
+                            Ok(reply) => {
+                                reply.send().await;
+                            }
                             Err(err) => warn!("[gatt] error creating read reply: {:?}", err),
                         }
                     }
                     GattEvent::Write(e) => {
                         info!("[gatt] handling WriteEvent");
                         match e.accept() {
-                            Ok(reply) => { reply.send().await; }
+                            Ok(reply) => {
+                                reply.send().await;
+                            }
                             Err(err) => warn!("[gatt] error creating write reply: {:?}", err),
                         }
                     }
@@ -393,7 +407,9 @@ async fn gatt_events_task(server: &Server<'_>, conn: &GattConnection<'_, '_, Def
                         // Catch-all for NotAllowed or structural events
                         info!("[gatt] handling other structural event");
                         match other_gatt_event.accept() {
-                            Ok(reply) => { reply.send().await; }
+                            Ok(reply) => {
+                                reply.send().await;
+                            }
                             Err(err) => warn!("[gatt] error accepting structural event: {:?}", err),
                         }
                     }
@@ -430,9 +446,7 @@ async fn advertise<'values, 'server, C: Controller>(
     )?;
     let mut scan_data = [0u8; 31];
     let mut scan_len = AdStructure::encode_slice(
-        &[
-            AdStructure::CompleteLocalName(name.as_bytes()),
-        ],
+        &[AdStructure::CompleteLocalName(name.as_bytes())],
         &mut scan_data[..],
     )?;
     let advertiser = peripheral
@@ -459,6 +473,26 @@ pub struct KeyStroke {
 // Standard HID Modifier bits
 const MODIFIER_NONE: u8 = 0x00;
 const MODIFIER_SHIFT: u8 = 0x02; // Left Shift bit flag
+
+use crate::input::{
+    CH_BACKSPACE, CH_DELETE, CH_DOWN_ARROW, CH_ENTER, CH_ESCAPE, CH_LEFT_ARROW, CH_RIGHT_ARROW,
+    CH_TAB, CH_UP_ARROW,
+};
+
+/// The 9 most common special keys, mapped to their HID usage IDs. Checked before
+/// [`ASCII_TO_HID`]; the arrows are non-ASCII so they cannot live in that table.
+/// Format: (char, modifier, keycode).
+const SPECIAL_KEYS: [(char, u8, u8); 9] = [
+    (CH_TAB, MODIFIER_NONE, 0x2B),         // Tab
+    (CH_ENTER, MODIFIER_NONE, 0x28),       // Enter / Return
+    (CH_BACKSPACE, MODIFIER_NONE, 0x2A),   // Backspace
+    (CH_ESCAPE, MODIFIER_NONE, 0x29),      // Escape
+    (CH_DELETE, MODIFIER_NONE, 0x4C),      // Delete Forward
+    (CH_LEFT_ARROW, MODIFIER_NONE, 0x50),  // ← Left Arrow
+    (CH_RIGHT_ARROW, MODIFIER_NONE, 0x4F), // → Right Arrow
+    (CH_UP_ARROW, MODIFIER_NONE, 0x52),    // ↑ Up Arrow
+    (CH_DOWN_ARROW, MODIFIER_NONE, 0x51),  // ↓ Down Arrow
+];
 
 // Index matches ASCII value directly. Format: (Modifier, KeyCode)
 const ASCII_TO_HID: [(u8, u8); 128] = {
@@ -535,6 +569,9 @@ const ASCII_TO_HID: [(u8, u8); 128] = {
 };
 
 pub fn char_to_hid(c: char) -> Option<KeyStroke> {
+    if let Some(&(_, modifier, keycode)) = SPECIAL_KEYS.iter().find(|&&(ch, _, _)| ch == c) {
+        return Some(KeyStroke { modifier, keycode });
+    }
     let ascii_val = c as u32;
     if ascii_val < 128 {
         let (modifier, keycode) = ASCII_TO_HID[ascii_val as usize];

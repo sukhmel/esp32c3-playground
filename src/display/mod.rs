@@ -5,7 +5,10 @@ pub mod ili9341;
 #[cfg(feature = "async_ili9341")]
 pub mod ili9341_async;
 
-use crate::input::{CHARSETS, value_to_percent};
+use crate::input::{
+    CH_BACKSPACE, CH_DELETE, CH_DOWN_ARROW, CH_ENTER, CH_ESCAPE, CH_LEFT_ARROW, CH_RIGHT_ARROW,
+    CH_TAB, CH_UP_ARROW, CHARSETS, value_to_percent,
+};
 use crate::inter_task::{
     CoordinatesReceiver, IpDisplayReceiver, MESSAGE_SIZE, MessageReceiver, Reading, TouchReceiver,
 };
@@ -243,11 +246,31 @@ pub async fn debug_input<T: DisplayTarget>(
                     Point::new(0, y_offset),
                     Size::new(POSITION_PAD_DIAMETER as u32, height),
                 );
-                let mut cropped = frame_buffer.cropped(&Rectangle::new(Point::new(0, 0), Size::new(320, height)));
-                let mut trans0 = cropped.translated(Point::new((POSITION_PAD_DIAMETER + 10) as i32, -y_offset));
-                draw_position(&mut trans0, band, current_coordinates.x_0, current_coordinates.y_0, current_coordinates.sel_x_0, current_coordinates.sel_y_0, current_coordinates.pressed, charset);
+                let mut cropped =
+                    frame_buffer.cropped(&Rectangle::new(Point::new(0, 0), Size::new(320, height)));
+                let mut trans0 =
+                    cropped.translated(Point::new((POSITION_PAD_DIAMETER + 10) as i32, -y_offset));
+                draw_position(
+                    &mut trans0,
+                    band,
+                    current_coordinates.x_0,
+                    current_coordinates.y_0,
+                    current_coordinates.sel_x_0,
+                    current_coordinates.sel_y_0,
+                    current_coordinates.pressed,
+                    charset,
+                );
                 let mut trans1 = cropped.translated(Point::new(0, -y_offset));
-                draw_position(&mut trans1, band, current_coordinates.x_1, current_coordinates.y_1, current_coordinates.sel_x_1, current_coordinates.sel_y_1, false, "");
+                draw_position(
+                    &mut trans1,
+                    band,
+                    current_coordinates.x_1,
+                    current_coordinates.y_1,
+                    current_coordinates.sel_x_1,
+                    current_coordinates.sel_y_1,
+                    false,
+                    "",
+                );
 
                 // Only the pads' columns change; sending 242-wide rows instead of
                 // the buffer's full 320 saves ~25% of the transfer. The iterator
@@ -257,10 +280,9 @@ pub async fn debug_input<T: DisplayTarget>(
                     .draw(
                         Point::new(0, (BAND_HEIGHT + 1) * 4 + y_offset),
                         Size::new(POSITION_PAD_AREA_WIDTH, height),
-                        frame_buffer
-                            .data
-                            .chunks(320)
-                            .flat_map(|row| row[..POSITION_PAD_AREA_WIDTH as usize].iter().copied()),
+                        frame_buffer.data.chunks(320).flat_map(|row| {
+                            row[..POSITION_PAD_AREA_WIDTH as usize].iter().copied()
+                        }),
                     )
                     .await
                     .unwrap();
@@ -448,19 +470,16 @@ fn draw_position<T: DrawTarget<Color = Rgb565>>(
     }
     let dot_top = y_0 + ((1.0 - y) * diameter as f32) as i32;
     if rows_visible(dot_top - 1, dot_top + 6) {
-        Circle::new(
-            Point::new(x_0 + (x * diameter as f32) as i32, dot_top),
-            4,
-        )
-        .into_styled(
-            PrimitiveStyleBuilder::new()
-                .stroke_width(1)
-                .stroke_color(Rgb565::BLACK)
-                .fill_color(Rgb565::WHITE)
-                .build(),
-        )
-        .draw(display)
-        .unwrap();
+        Circle::new(Point::new(x_0 + (x * diameter as f32) as i32, dot_top), 4)
+            .into_styled(
+                PrimitiveStyleBuilder::new()
+                    .stroke_width(1)
+                    .stroke_color(Rgb565::BLACK)
+                    .fill_color(Rgb565::WHITE)
+                    .build(),
+            )
+            .draw(display)
+            .unwrap();
     }
     let mut char = heapless::String::<4>::new();
     if charset.len() == 0 {
@@ -474,13 +493,18 @@ fn draw_position<T: DrawTarget<Color = Rgb565>>(
                 }
 
                 for (index, ch) in CHARSETS[(x + 3 * y) as usize].chars().enumerate() {
-                    let index = if index < 4 {
-                        index as i32
-                    } else {
-                        index as i32 + 1
-                    };
+                    let index = index as i32;
                     let text_y = y_pos + 10 * (index / 3);
                     if !rows_visible(text_y - 10, text_y + 4) {
+                        continue;
+                    }
+                    if draw_special_glyph(
+                        display,
+                        ch,
+                        Point::new(x_pos + 10 * (index % 3), text_y),
+                        6,
+                        8,
+                    ) {
                         continue;
                     }
                     if let Err(_) = core::fmt::write(&mut char, format_args!("{}", ch)) {
@@ -501,14 +525,13 @@ fn draw_position<T: DrawTarget<Color = Rgb565>>(
         }
     }
     for (index, ch) in charset.chars().enumerate() {
-        let index = if index < 4 {
-            index as i32
-        } else {
-            index as i32 + 1
-        };
+        let index = index as i32;
         let x_pos = x_0 + diameter / 3 * (index % 3) + diameter / 6 - 5;
         let y_pos = y_0 + diameter / 3 * (index / 3) + diameter / 6 + 4;
         if !rows_visible(y_pos - 20, y_pos + 6) {
+            continue;
+        }
+        if draw_special_glyph(display, ch, Point::new(x_pos, y_pos), 11, 15) {
             continue;
         }
         if let Err(_) = core::fmt::write(&mut char, format_args!("{}", ch)) {
@@ -525,6 +548,189 @@ fn draw_position<T: DrawTarget<Color = Rgb565>>(
         .unwrap();
         char.clear();
     }
+}
+
+// Some arrows still look off, but I'm tired of fine-tuning them.
+// Maybe I should learn to make fonts like the ones in `embedded_graphics`.
+fn draw_special_glyph<T: DrawTarget<Color = Rgb565>>(
+    display: &mut T,
+    ch: char,
+    anchor: Point,
+    w: i32,
+    h: i32,
+) -> bool {
+    let stroke_width = if w > 8 { 2 } else { 1 };
+    let style = PrimitiveStyle::with_stroke(Rgb565::BLACK, stroke_width);
+    let left = anchor.x;
+    let right = anchor.x + w - 1;
+    let bottom = anchor.y;
+    let top = anchor.y - h + 2;
+    let center_x = (left + right) / 2;
+    let center_y = (top + bottom) / 2;
+    let hy = h / 4; // arrowhead y extent
+    let hx = w / 3; // arrowhead x extent
+    // upwards arrowhead y extent is larger to account for stroke width
+    // right to left line is wide downwards, left to right is wide upwards
+    // for the same reason the left arrowhead line is also shifted
+    let stroke_adjustment = stroke_width as i32 - 1;
+    let mut line = |a: Point, b: Point| {
+        let _ = Line::new(a, b).into_styled(style).draw(display);
+    };
+    match ch {
+        CH_BACKSPACE => {
+            // ← left arrow with a stop
+            line(Point::new(left, center_y), Point::new(right, center_y));
+            line(
+                Point::new(left + stroke_adjustment * 2, center_y - stroke_adjustment),
+                Point::new(
+                    left + stroke_width as i32 * hx - stroke_adjustment,
+                    center_y - hy - stroke_adjustment,
+                ),
+            );
+            line(
+                Point::new(left + stroke_adjustment * 2, center_y + stroke_adjustment),
+                Point::new(left + stroke_width as i32 * hx - stroke_adjustment, center_y + hy + stroke_adjustment),
+            );
+            line(
+                Point::new(left, center_y - hy - stroke_adjustment),
+                Point::new(left, center_y + hy + stroke_adjustment),
+            );
+        }
+        // not fine-tuned
+        CH_DELETE => {
+            // → right arrow with a stop
+            line(Point::new(left, center_y), Point::new(right, center_y));
+            line(
+                Point::new(right, center_y - stroke_adjustment),
+                Point::new(right - hx, center_y - hy - stroke_adjustment),
+            );
+            line(
+                Point::new(right, center_y),
+                Point::new(right - hx, center_y + hy),
+            );
+            line(
+                Point::new(right, center_y - hy - stroke_adjustment),
+                Point::new(right, center_y + hy),
+            );
+        }
+        // fine-tuned
+        CH_ESCAPE => {
+            // ↑ up arrow from box instead of ⎋ for now
+            let box_right = right - 1;
+            line(Point::new(center_x, bottom - hy), Point::new(center_x, top));
+            line(
+                Point::new(center_x - stroke_adjustment, top),
+                Point::new(center_x - hx - stroke_adjustment, top + hy),
+            );
+            line(
+                Point::new(center_x - stroke_adjustment, top),
+                Point::new(center_x + hx - stroke_adjustment, top + hy),
+            );
+            line(Point::new(left, center_y + 2), Point::new(left, bottom));
+            line(Point::new(left, bottom), Point::new(box_right, bottom));
+            line(Point::new(box_right, center_y + 2), Point::new(box_right, bottom));
+        }
+        // fine-tuned
+        CH_ENTER => {
+            // ↵ return: down the right edge, left along the middle, arrowhead left
+            let shift = hy - 1 + stroke_adjustment;
+            line(Point::new(right, top + shift), Point::new(right, center_y + shift));
+            line(Point::new(left, center_y + shift), Point::new(right, center_y + shift));
+            line(
+                Point::new(left, center_y + shift),
+                Point::new(left + hx + stroke_adjustment, center_y - hy + shift - stroke_adjustment),
+            );
+            line(
+                Point::new(left, center_y + shift),
+                Point::new(left + hx + stroke_adjustment, center_y + hy + shift + stroke_adjustment),
+            );
+        }
+        // fine-tuned
+        CH_TAB => {
+            // ↹ two arrows opposite way
+            let y_arrow = top + h / 4 - 1 + stroke_adjustment;
+            line(Point::new(left, y_arrow), Point::new(right, y_arrow));
+            line(
+                Point::new(left, y_arrow),
+                Point::new(left + hx, y_arrow - hy),
+            );
+            line(
+                Point::new(left, y_arrow),
+                Point::new(left + hx, y_arrow + hy),
+            );
+
+            let y_arrow = top + 3 * h / 4;
+            line(Point::new(left, y_arrow), Point::new(right, y_arrow));
+            line(
+                Point::new(right, y_arrow - stroke_adjustment),
+                Point::new(right - hx, y_arrow - hy - stroke_adjustment),
+            );
+            line(
+                Point::new(right, y_arrow - stroke_adjustment),
+                Point::new(right - hx, y_arrow + hy - stroke_adjustment),
+            );
+        }
+        // fine-tuned
+        CH_DOWN_ARROW => {
+            // ↓
+            line(Point::new(center_x, bottom), Point::new(center_x, top));
+            line(
+                Point::new(center_x - stroke_adjustment, bottom - stroke_adjustment),
+                Point::new(
+                    center_x - hx - stroke_adjustment,
+                    bottom - hy - stroke_adjustment,
+                ),
+            );
+            line(
+                Point::new(center_x + stroke_adjustment, bottom - stroke_adjustment),
+                Point::new(center_x + hx + stroke_adjustment, bottom - hy - stroke_adjustment),
+            );
+        }
+        // fine-tuned
+        CH_UP_ARROW => {
+            // ↑
+            line(Point::new(center_x, bottom), Point::new(center_x, top));
+            line(
+                Point::new(
+                    center_x - hx - stroke_adjustment,
+                    top + hy + stroke_adjustment,
+                ),
+                Point::new(center_x - stroke_adjustment, top + stroke_adjustment),
+            );
+            line(
+                Point::new(center_x + hx + stroke_adjustment, top + hy + stroke_adjustment),
+                Point::new(center_x + stroke_adjustment, top + stroke_adjustment),
+            );
+        }
+        // fine-tuned
+        CH_LEFT_ARROW => {
+            // ←
+            line(Point::new(left, center_y), Point::new(right, center_y));
+            line(
+                Point::new(left + hx + stroke_adjustment, center_y - hy - stroke_adjustment * 2),
+                Point::new(left, center_y - stroke_adjustment),
+            );
+            line(
+                Point::new(left + hx + stroke_adjustment, center_y + hy),
+                Point::new(left, center_y - stroke_adjustment),
+            );
+        }
+        // fine-tuned
+        CH_RIGHT_ARROW => {
+            // →
+            line(Point::new(left, center_y), Point::new(right, center_y));
+            line(
+                Point::new(right, center_y - stroke_adjustment),
+                Point::new(right - hx - stroke_adjustment, center_y - hy - stroke_adjustment * 2),
+            );
+            line(
+                Point::new(right, center_y - stroke_adjustment),
+                Point::new(right - hx - stroke_adjustment, center_y + hy),
+            );
+        }
+        _ => return false,
+    }
+    true
 }
 
 fn draw_axis_min_max<T: DrawTarget<Color = Rgb565>, M: core::fmt::Display>(
