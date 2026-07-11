@@ -1,8 +1,9 @@
 use crate::buzzer::Melody;
 use crate::touch::TouchInputResponse;
-use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
+use embassy_sync::blocking_mutex::raw::{CriticalSectionRawMutex};
 use embassy_sync::channel::{Channel, Receiver};
-use embassy_sync::watch::{Receiver as WatchReceiver, Watch};
+use embassy_sync::signal::Signal;
+use embassy_sync::watch::{Receiver as WatchReceiver, Sender as WatchSender, Watch};
 
 pub type MessageChannelType =
     Channel<CriticalSectionRawMutex, heapless::String<MESSAGE_SIZE>, CHANNEL_SIZE>;
@@ -38,11 +39,14 @@ pub type IpDisplayReceiver = WatchReceiver<
     WATCH_CONSUMERS,
 >;
 
-/// Latest-value channel carrying BLE connection state (`true` = a central is
-/// connected). The Wi-Fi side observes this to stand down while BLE is active,
-/// since the ESP32-C3 shares a single 2.4 GHz radio between Wi-Fi and BLE.
+/// Latest-value channel carrying BLE connection state (`true` = a central is connected).
 pub type BleStateWatch = Watch<CriticalSectionRawMutex, bool, WATCH_CONSUMERS>;
 pub type BleStateReceiver = WatchReceiver<'static, CriticalSectionRawMutex, bool, WATCH_CONSUMERS>;
+
+/// Current button state, set in the interrupt handler.
+pub type ButtonWatch = Watch<CriticalSectionRawMutex, ButtonState, WATCH_CONSUMERS>;
+pub type ButtonReceiver = WatchReceiver<'static, CriticalSectionRawMutex, ButtonState, WATCH_CONSUMERS>;
+pub type ButtonSender = WatchSender<'static, CriticalSectionRawMutex, ButtonState, WATCH_CONSUMERS>;
 
 pub const MESSAGE_SIZE: usize = 128;
 pub const CHANNEL_SIZE: usize = 2;
@@ -53,6 +57,8 @@ pub static COORDINATES_CHANNEL: CoordinatesChannelType = Channel::new();
 pub static CHAR_CHANNEL: CharChannelType = Channel::new();
 pub static KEYPRESS_CHANNEL: KeypressChannelType = Channel::new();
 pub static TOUCH_CHANNEL: TouchChannelType = Channel::new();
+pub static BUTTON_STATE_SIGNAL: Signal<CriticalSectionRawMutex, ButtonState> = Signal::new();
+
 pub static IP_DISPLAY: IpDisplayWatch = Watch::new();
 pub static BLE_CONNECTED: BleStateWatch = Watch::new();
 
@@ -103,4 +109,10 @@ impl Default for Reading {
 pub enum Keypress {
     Pressed(char),
     Released(char),
+}
+
+#[derive(Debug, Copy, Clone)]
+pub enum ButtonState {
+    Pressed,
+    Released,
 }

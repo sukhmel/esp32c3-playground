@@ -1,7 +1,8 @@
-use crate::inter_task::{CHAR_CHANNEL, COORDINATES_CHANNEL, KEYPRESS_CHANNEL, Keypress, Reading};
+use crate::inter_task::{CHAR_CHANNEL, COORDINATES_CHANNEL, KEYPRESS_CHANNEL, Keypress, Reading, ButtonState, BUTTON_STATE_SIGNAL};
 use crate::pins::AnalogPeripherals;
 use ariel_os::debug::log::{debug, info, warn};
 use ariel_os::time::{Instant, Timer};
+use embassy_futures::select::{select, Either};
 use esp_hal::analog::adc::{Adc, AdcConfig, Attenuation};
 
 static DEFAULT_MIN_V: u16 = 1620;
@@ -30,9 +31,9 @@ pub static CHARSETS: [&str; 9] = [
     "{P}<←>:'\"",
     "QWEA DZSX",
     "1234→5678",
-    "90!@\u{8}#$%^",
+    "90!@ #$%^",
     "(&)*↓-+=\\",
-    "[ ]{\t}|;~",
+    "[\u{8}]{\t}|;~",
 ];
 
 macro_rules! value_to_percent {
@@ -66,8 +67,32 @@ pub async fn read_joystick(peripherals: AnalogPeripherals) {
     let mut adc1 = Adc::new(peripherals.adc1, adc1_config);
     let mut keypress = None;
     let mut keypress_cycle = 0;
+    let mut button_pressed = false;
 
     loop {
+        match select(
+            BUTTON_STATE_SIGNAL.wait(),
+            Timer::after_millis(100),
+        ).await {
+            Either::Second(_) => {}
+            Either::First(state) => {
+                match state {
+                    ButtonState::Pressed => {
+                        info!("Set button pressed");
+                        button_pressed = true;
+                    }
+                    ButtonState::Released => {
+                        button_pressed = false;
+                        keypress_cycle = 0;
+                        if let Some(char) = keypress.take() {
+                            debug!("Key released: {}", char);
+                            let _ = KEYPRESS_CHANNEL.try_send(Keypress::Released(char));
+                        }
+                    }
+                }
+            }
+        }
+
         let start = Instant::now();
         let x_0_value = nb::block!(adc1.read_oneshot(&mut x_0)).unwrap();
         let y_0_value = nb::block!(adc1.read_oneshot(&mut y_0)).unwrap();
@@ -79,14 +104,19 @@ pub async fn read_joystick(peripherals: AnalogPeripherals) {
         let y_0 = value_to_percent!(y_0_value, min_v, max_v, true);
         let x_1 = value_to_percent!(x_1_value, min_v, max_v, false);
         let y_1 = value_to_percent!(y_1_value, min_v, max_v, true);
-        let sel_x_0 = if x_0 < 0.3 {
+        // when button is pressed, select the center character
+        let sel_x_0 = if button_pressed {
+            1
+        } else if x_0 < 0.3 {
             0
         } else if x_0 < 0.7 {
             1
         } else {
             2
         };
-        let sel_y_0 = if y_0 < 0.3 {
+        let sel_y_0 = if button_pressed {
+            1
+        } else if y_0 < 0.3 {
             2
         } else if y_0 < 0.7 {
             1
@@ -109,10 +139,24 @@ pub async fn read_joystick(peripherals: AnalogPeripherals) {
         };
 
         let charset = CHARSETS[(sel_x_1 + sel_y_1 * 3) as usize % CHARSETS.len()];
-        if x_0 < 0.05 || y_0 < 0.05 || x_0 > 0.95 || y_0 > 0.95 {
+        if button_pressed {
+            let char = charset.chars().nth(4).unwrap();
+            match keypress.replace(char) {
+                Some(prev_char) if char != prev_char => {
+                    debug!("Key released: {}", prev_char);
+                    let _ = KEYPRESS_CHANNEL.try_send(Keypress::Released(prev_char));
+                }
+                None => {
+                    debug!("Key stored: {}", char);
+                    keypress = Some(char);
+                    // since pressing a button takes more effort, there is no need for grace period.
+                    keypress_cycle = 2;
+                }
+                _ => {}
+            }
+        } else if x_0 < 0.05 || y_0 < 0.05 || x_0 > 0.95 || y_0 > 0.95 {
             let select = sel_x_0 + sel_y_0 * 3;
-            let skip = if select < 4 { select } else { select - 1 };
-            let Some(char) = charset.chars().skip(skip as usize).next() else {
+            let Some(char) = charset.chars().nth(select as usize) else {
                 keypress_cycle = 0;
                 continue;
             };
@@ -129,15 +173,8 @@ pub async fn read_joystick(peripherals: AnalogPeripherals) {
                     keypress = Some(char);
                     keypress_cycle = 0;
                 }
-                Some(char) => {
+                Some(_char) => {
                     keypress_cycle += 1;
-                    if keypress_cycle == 2 || keypress_cycle > 9 && keypress_cycle % 3 == 0 {
-                        debug!("Key pressed: {}", char);
-                        if CHAR_CHANNEL.try_send(char).is_err() {
-                            debug!("Failed to send keypress");
-                        }
-                        let _ = KEYPRESS_CHANNEL.try_send(Keypress::Pressed(char));
-                    }
                 }
             }
         } else {
@@ -145,6 +182,16 @@ pub async fn read_joystick(peripherals: AnalogPeripherals) {
                 let _ = KEYPRESS_CHANNEL.try_send(Keypress::Released(char));
             }
             keypress_cycle = 0;
+        }
+
+        if keypress_cycle == 2 || keypress_cycle > 9 && keypress_cycle % 3 == 0 {
+            if let Some(char) = keypress {
+                debug!("Key pressed: {}", char);
+                if CHAR_CHANNEL.try_send(char).is_err() {
+                    debug!("Failed to send keypress");
+                }
+                let _ = KEYPRESS_CHANNEL.try_send(Keypress::Pressed(char));
+            }
         }
 
         if let Err(_) = COORDINATES_CHANNEL.try_send(Reading {
@@ -167,7 +214,5 @@ pub async fn read_joystick(peripherals: AnalogPeripherals) {
         }) {
             warn!("Failed to send coordinates");
         }
-
-        Timer::after_millis(100).await;
     }
 }

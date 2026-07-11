@@ -2,6 +2,7 @@ use ariel_os_hal::hal::peripherals;
 ariel_os::hal::group_peripherals!(Peripherals {
     binary: BinaryPeripherals,
     analog: AnalogPeripherals,
+    system: SystemPeripherals,
 });
 ariel_os::hal::define_peripherals!(BinaryPeripherals {
     uart: UART0,
@@ -32,9 +33,10 @@ ariel_os::hal::define_peripherals!(AnalogPeripherals {
     pin3: GPIO3,
 });
 ariel_os::hal::define_peripherals!(SystemPeripherals {
-    system: SYSTEM,
-    sys_timer: SYSTIMER,
-    rng: RNG,
-    timer_group0: TIMG0,
-    bt: BT,
+    // system: SYSTEM,
+    // sys_timer: SYSTIMER,
+    // rng: RNG,
+    // timer_group0: TIMG0,
+    // bt: BT,
+    io_mux: IO_MUX,
 });

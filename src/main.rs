@@ -4,14 +4,15 @@ extern crate alloc;
 
 include!(concat!(env!("OUT_DIR"), "/secrets.rs"));
 
+use core::cell::RefCell;
 #[cfg(feature = "wifi")]
 use crate::buzzer::Melody;
 use crate::buzzer::{SoundLed, buzz};
 #[cfg(feature = "ble")]
 use crate::inter_task::KEYPRESS_CHANNEL;
 #[cfg(feature = "wifi")]
-use crate::inter_task::{BLE_CONNECTED, CHAR_CHANNEL, MESSAGE_SIZE};
-use crate::inter_task::{COORDINATES_CHANNEL, IP_DISPLAY, SOUND_CHANNEL, TOUCH_CHANNEL};
+use crate::inter_task::{CHAR_CHANNEL, MESSAGE_SIZE};
+use crate::inter_task::{ButtonState, BUTTON_STATE_SIGNAL, COORDINATES_CHANNEL, IP_DISPLAY, SOUND_CHANNEL, TOUCH_CHANNEL};
 #[cfg(feature = "ble")]
 use crate::keyboard::serve_keyboard;
 use crate::pins::Peripherals;
@@ -28,10 +29,9 @@ use ariel_os::time::{Duration, Timer, with_timeout};
 use ariel_os_hal::gpio::{Level, Output};
 #[cfg(not(feature = "async_ili9341"))]
 use core::cell::RefCell;
+use critical_section::Mutex;
 use display::Display;
-use embassy_futures::join::join5;
-#[cfg(feature = "wifi")]
-use embassy_futures::select::{Either, select};
+use embassy_futures::join::{join4};
 #[cfg(feature = "async_ili9341")]
 use embassy_sync::blocking_mutex::raw::NoopRawMutex;
 #[cfg(not(feature = "async_ili9341"))]
@@ -42,6 +42,8 @@ use esp_hal::gpio::OutputPin;
 use esp_hal::ledc::Ledc;
 use esp_hal::spi::master::{Config, Spi};
 use esp_hal::time::Rate;
+use esp_hal::gpio::{Event, Input, InputConfig, Io, Pull};
+use esp_hal::handler;
 
 mod buzzer;
 mod display;
@@ -61,6 +63,47 @@ pub mod rainbow {
 fn panic(info: &core::panic::PanicInfo) -> ! {
     println!("{}", info);
     loop {}
+}
+
+static BUTTON: Mutex<RefCell<Option<(Input, ButtonState)>>> = Mutex::new(RefCell::new(None));
+
+/// The button clicks could have been processed with
+/// [`embedded_hal_async::digital::Wait::wait_for_low`], but this is more of a learning exercise.
+///
+/// Although it looks like IRQ slows down the system a bit. I should compare it to waiting.
+/// BLE connected with 45 ms time, IRQ, no movement: 286–311 ms
+/// BLE connected with 45 ms time, IRQ, movement: 288–677 ms
+/// BLE advertises, IRQ, no movement: 233–260 ms
+/// BLE advertises, IRQ, movement: 233–447 ms
+#[handler]
+fn handler() {
+    critical_section::with(|cs| {
+        let mut button = BUTTON.borrow_ref_mut(cs);
+        let Some((button, state)) = button.as_mut() else {
+            // Some other interrupt has occurred
+            // before the button was set up.
+            return;
+        };
+
+        if button.is_interrupt_set() {
+            match state {
+                ButtonState::Pressed => {
+                    info!("Button released");
+                    let _ = BUTTON_STATE_SIGNAL.signal(ButtonState::Released);
+                    button.unlisten();
+                    button.listen(Event::LowLevel);
+                    *state = ButtonState::Released;
+                }
+                ButtonState::Released => {
+                    info!("Button pressed");
+                    let _ = BUTTON_STATE_SIGNAL.signal(ButtonState::Pressed);
+                    button.unlisten();
+                    button.listen(Event::HighLevel);
+                    *state = ButtonState::Pressed;
+                }
+            }
+        }
+    });
 }
 
 #[ariel_os::task(autostart, peripherals)]
@@ -98,9 +141,22 @@ async fn ui(peripherals: Peripherals) {
     .unwrap();
     #[cfg(feature = "async_ili9341")]
     let mut display = Display::new(&shared_spi, cs_pin, dc_pin, rst_pin).await;
-    let ledc = Ledc::new(peripherals.binary.ledc);
+    // let ledc = Ledc::new(peripherals.binary.ledc);
     // let rmt = Rmt::new(peripherals.binary.rmt, Rate::from_mhz(80)).unwrap();
     // let buzzer = SoundLed::new(peripherals.binary.pin19, ledc, peripherals.binary.pin8, rmt);
+
+    let mut io = Io::new(peripherals.system.io_mux);
+    io.set_interrupt_handler(handler);
+    // Set up the input and store it in the static variable.
+    // This example uses a push button that is high when not
+    // pressed and low when pressed.
+    let config = InputConfig::default().with_pull(Pull::Up);
+    let mut button = Input::new(peripherals.binary.pin19, config);
+    critical_section::with(|cs| {
+        button.listen(Event::LowLevel);
+        BUTTON.borrow_ref_mut(cs).replace((button, ButtonState::Released));
+    });
+
     info!("Starting join");
     #[cfg(feature = "ble")]
     let keyboard = serve_keyboard(KEYPRESS_CHANNEL.receiver());
@@ -108,14 +164,14 @@ async fn ui(peripherals: Peripherals) {
     // never touches the time driver.
     #[cfg(not(feature = "ble"))]
     let keyboard = core::future::pending::<()>();
-    let _ = join5(
+    let _ = join4(
         keyboard,
         display.debug_input(
             COORDINATES_CHANNEL.receiver(),
             IP_DISPLAY.receiver().unwrap(),
             TOUCH_CHANNEL.receiver(),
         ),
-        buzz(peripherals.binary.pin19, ledc, SOUND_CHANNEL.receiver()),
+        // buzz(peripherals.binary.pin19, ledc, SOUND_CHANNEL.receiver()),
         touch.run(),
         input::read_joystick(peripherals.analog),
     )
@@ -176,37 +232,12 @@ async fn run_echo_server(stack: Stack<'static>) -> ! {
     let mut echo_buffer = [0; 64];
 
     let mut socket = TcpSocket::new(stack, &mut rx_buffer, &mut tx_buffer);
-    let mut ble = BLE_CONNECTED.receiver().unwrap();
     info!("Server function started. Listening on port 8080...");
 
     loop {
-        // The ESP32-C3 has a single 2.4 GHz radio shared between Wi-Fi and BLE.
-        // While a BLE central is connected, stop serving TCP so we don't fight
-        // BLE for the radio: drop any pending socket and wait for BLE to release.
-        if ble.try_get() == Some(true) {
-            info!("BLE connected: TCP server standing down");
-            socket.abort();
-            let _ = socket.flush().await;
-            while ble.changed().await {} // returns the new value; exits when it flips to false
-            info!("BLE disconnected: TCP server resuming");
-        }
-
         debug!("creating socket");
         let mut begin = true;
-        // Race the accept against BLE becoming active so a connection mid-wait
-        // still makes us stand down promptly.
-        let accept = match select(
-            socket.accept(IpListenEndpoint::from(8080)),
-            wait_for(&mut ble, true),
-        )
-        .await
-        {
-            Either::First(result) => result,
-            Either::Second(()) => {
-                socket.abort();
-                continue;
-            }
-        };
+        let accept = socket.accept(IpListenEndpoint::from(8080)).await;
         match accept {
             Err(e) => {
                 error!("Failed to accept client: {:?}", e);

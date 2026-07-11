@@ -1,5 +1,3 @@
-#[cfg(feature = "agm1264f")]
-pub mod agm1264f;
 #[cfg(not(feature = "async_ili9341"))]
 pub mod ili9341;
 #[cfg(feature = "async_ili9341")]
@@ -144,6 +142,7 @@ pub async fn debug_input<T: DisplayTarget>(
     let mut y_0 = 0.0;
     let mut current_coordinates = Reading::default();
     let mut current_select = 4;
+    let mut current_pressed = false;
     loop {
         let start = Instant::now();
         let mut loaded = 0;
@@ -232,10 +231,12 @@ pub async fn debug_input<T: DisplayTarget>(
         if f32::abs(x_0 - current_coordinates.x_0) > 0.01
             || f32::abs(y_0 - current_coordinates.y_0) > 0.01
             || current_select != select
+            || current_pressed != current_coordinates.pressed
         {
             x_0 = current_coordinates.x_0;
             y_0 = current_coordinates.y_0;
             current_select = select;
+            current_pressed = current_coordinates.pressed;
             for y in (0..POSITION_PAD_DIAMETER).step_by(BAND_HEIGHT as usize) {
                 let y_offset = y as i32;
                 let height = BAND_HEIGHT.min((POSITION_PAD_DIAMETER - y) as i32) as u32;

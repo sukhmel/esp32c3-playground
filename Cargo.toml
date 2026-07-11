@@ -17,7 +17,7 @@ embedded-hal-bus = { version = "0.3" }
 esp-hal = { version = "1", features = ["esp32c3", "unstable"] }
 esp-hal-buzzer = "0.3"
 esp-hal-smartled = { version = "0.17", features = ["esp32c3"] }
-heapless = "0.9.3"
+heapless = { version = "0.9.3", features = ["portable-atomic"] }
 libm = "0.2"
 mipidsi = "0.10"
 nb = "1"
@@ -26,7 +26,8 @@ smart-leds = "0.4"
 static_cell = "2"
 sky-ili9341 = { version = "0.1", features = ["async", "graphics"], optional = true }
 trouble-host = { version = "0.5.1", features = ["gatt", "derive", "peripheral", "security"], optional = true }
-xpt2046-async = { git = "https://github.com/sukhmel/xpt2046_async.git" }
+xpt2046-async = { git = "https://github.com/sukhmel/xpt2046_async.git", version = "0.3.2" }
+critical-section = "1.2.0"
 
 [patch.crates-io]
 esp-hal-smartled = { path = "patches/esp-hal-smartled" }
@@ -38,7 +39,6 @@ unexpected_cfgs = { level = "warn", check-cfg = [
 
 [features]
 async_ili9341 = ["sky-ili9341", "embedded-hal-bus/async", "embedded-hal-async", "embassy-embedded-hal"]
-agm1264f = []
 # When enabled, requires CONFIG_WIFI_NETWORK / CONFIG_WIFI_PASSWORD at build time.
 wifi = ["ariel-os/wifi-esp", "ariel-os/net", "ariel-os/ipv4", "ariel-os/dns", "ariel-os/tcp", "ariel-os/dhcpv4"]
 # BLE HID keyboard. The cargo feature alone pulls in the ariel-os BLE stack
