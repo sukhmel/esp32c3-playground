@@ -70,12 +70,34 @@ static BUTTON: Mutex<RefCell<Option<(Input, ButtonState)>>> = Mutex::new(RefCell
 /// The button clicks could have been processed with
 /// [`embedded_hal_async::digital::Wait::wait_for_low`], but this is more of a learning exercise.
 ///
-/// Although it looks like IRQ slows down the system a bit. I should compare it to waiting.
-/// BLE connected with 45 ms time, IRQ, no movement: 286–311 ms
-/// BLE connected with 45 ms time, IRQ, movement: 288–677 ms
-/// BLE advertises, IRQ, no movement: 233–260 ms
-/// BLE advertises, IRQ, movement: 233–447 ms
+/// Although it looks like IRQ slows down the system quite a bit. I should compare it to waiting.
+/// It seems to be related to program memory layout as changing the handler code causes a change in
+/// speed even when the handler code is not executed as no interruption is generated.
+/// 
+/// WiFi disconnected, BLE connected with 45 ms time, IRQ, no movement: 286–311 ms
+/// WiFi disconnected, BLE connected with 45 ms time, IRQ, movement: 288–677 ms
+/// WiFi disconnected, BLE advertises, IRQ, no movement: 233–260 ms
+/// WiFi disconnected, BLE advertises, IRQ, movement: 233–447 ms
+/// WiFi disconnected, BLE connected with 45 ms time, no IRQ, no movement: 102–114 ms
+/// WiFi disconnected, BLE connected with 45 ms time, no IRQ, movement: 102–230 ms
+/// WiFi disconnected, BLE advertises, no IRQ, no movement: 78–102 ms
+/// WiFi disconnected, BLE advertises, no IRQ, movement: 81–201 ms
+///
+/// ```
+/// let mut io = Io::new(peripherals.system.io_mux);
+/// io.set_interrupt_handler(handler);
+/// // Set up the input and store it in the static variable.
+/// // This example uses a push button that is high when not
+/// // pressed and low when pressed.
+/// let config = InputConfig::default().with_pull(Pull::Up);
+/// let mut button = Input::new(peripherals.binary.pin19, InputConfig::default().with_pull(Pull::Up));
+/// critical_section::with(|cs| {
+/// button.listen(Event::LowLevel);
+/// BUTTON.borrow_ref_mut(cs).replace((button, ButtonState::Released));
+/// });
+/// ```
 #[handler]
+#[allow(dead_code)]
 fn handler() {
     critical_section::with(|cs| {
         let mut button = BUTTON.borrow_ref_mut(cs);
@@ -145,18 +167,6 @@ async fn ui(peripherals: Peripherals) {
     // let rmt = Rmt::new(peripherals.binary.rmt, Rate::from_mhz(80)).unwrap();
     // let buzzer = SoundLed::new(peripherals.binary.pin19, ledc, peripherals.binary.pin8, rmt);
 
-    let mut io = Io::new(peripherals.system.io_mux);
-    io.set_interrupt_handler(handler);
-    // Set up the input and store it in the static variable.
-    // This example uses a push button that is high when not
-    // pressed and low when pressed.
-    let config = InputConfig::default().with_pull(Pull::Up);
-    let mut button = Input::new(peripherals.binary.pin19, config);
-    critical_section::with(|cs| {
-        button.listen(Event::LowLevel);
-        BUTTON.borrow_ref_mut(cs).replace((button, ButtonState::Released));
-    });
-
     info!("Starting join");
     #[cfg(feature = "ble")]
     let keyboard = serve_keyboard(KEYPRESS_CHANNEL.receiver());
@@ -164,6 +174,7 @@ async fn ui(peripherals: Peripherals) {
     // never touches the time driver.
     #[cfg(not(feature = "ble"))]
     let keyboard = core::future::pending::<()>();
+    let button = Input::new(peripherals.binary.pin19, InputConfig::default().with_pull(Pull::Up));
     let _ = join4(
         keyboard,
         display.debug_input(
@@ -173,7 +184,7 @@ async fn ui(peripherals: Peripherals) {
         ),
         // buzz(peripherals.binary.pin19, ledc, SOUND_CHANNEL.receiver()),
         touch.run(),
-        input::read_joystick(peripherals.analog),
+        input::read_joystick(peripherals.analog, button),
     )
     .await;
     info!("Finished UI");

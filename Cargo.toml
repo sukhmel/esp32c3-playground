@@ -51,7 +51,7 @@ toml = "1"
 embedded-graphics = "0.8"
 
 [profile.release]
-opt-level = "z"     # Optimize aggressively for binary size
+opt-level = 3
 lto = true          # Enable Link-Time Optimization across all crates
 codegen-units = 1   # Reduce parallel code generation to maximize LTO efficiency
 panic = "abort"     # Strip unwinding code to save massive amounts of flash

@@ -4,6 +4,7 @@ use ariel_os::debug::log::{debug, info, warn};
 use ariel_os::time::{Instant, Timer};
 use embassy_futures::select::{select, Either};
 use esp_hal::analog::adc::{Adc, AdcConfig, Attenuation};
+use esp_hal::gpio::{Event, Input};
 
 static DEFAULT_MIN_V: u16 = 1620;
 static DEFAULT_MAX_V: u16 = 3860;
@@ -55,7 +56,7 @@ macro_rules! value_to_percent {
 
 pub(crate) use value_to_percent;
 
-pub async fn read_joystick(peripherals: AnalogPeripherals) {
+pub async fn read_joystick(peripherals: AnalogPeripherals, mut button: Input<'_>) {
     info!("input: task started");
     let mut min_v = DEFAULT_MIN_V;
     let mut max_v = DEFAULT_MAX_V;
@@ -71,23 +72,24 @@ pub async fn read_joystick(peripherals: AnalogPeripherals) {
 
     loop {
         match select(
-            BUTTON_STATE_SIGNAL.wait(),
+            button.wait_for(if button_pressed {
+                Event::HighLevel
+            } else {
+                Event::LowLevel
+            }),
             Timer::after_millis(100),
         ).await {
             Either::Second(_) => {}
-            Either::First(state) => {
-                match state {
-                    ButtonState::Pressed => {
-                        info!("Set button pressed");
-                        button_pressed = true;
-                    }
-                    ButtonState::Released => {
-                        button_pressed = false;
-                        keypress_cycle = 0;
-                        if let Some(char) = keypress.take() {
-                            debug!("Key released: {}", char);
-                            let _ = KEYPRESS_CHANNEL.try_send(Keypress::Released(char));
-                        }
+            Either::First(()) => {
+                button_pressed = !button_pressed;
+
+                if button_pressed {
+                    info!("Set button pressed");
+                } else {
+                    keypress_cycle = 0;
+                    if let Some(char) = keypress.take() {
+                        debug!("Key released: {}", char);
+                        let _ = KEYPRESS_CHANNEL.try_send(Keypress::Released(char));
                     }
                 }
             }
