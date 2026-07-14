@@ -47,12 +47,101 @@ static INPUT_COLORS: [Rgb565; 4] = [
     Rgb565::CSS_DARK_GREEN,
 ];
 static BAND_HEIGHT: i32 = 30;
+/// Redraw the coordinate and timing graphs after this many readings.
+const GRAPH_REDRAW_VALUE_INTERVAL: usize = 100;
+/// Redraw the coordinate and timing graphs after this much time to reduce draw count.
+const GRAPH_REDRAW_INTERVAL_MS: u64 = 1_000;
+const TIME_AXIS_GLYPH_WIDTH: u32 = 8;
 static POSITION_PAD_DIAMETER: usize = 240usize
     .checked_sub(4 * (BAND_HEIGHT + 1) as usize)
     .unwrap();
 
 /// Two pads side by side with a 10 px gap; columns right of this never change.
 static POSITION_PAD_AREA_WIDTH: u32 = POSITION_PAD_DIAMETER as u32 * 2 + 10;
+const POSITION_PAD_ROWS: usize = 3;
+const POSITION_PAD_ROW_MAX_HEIGHT: usize = POSITION_PAD_DIAMETER.div_ceil(POSITION_PAD_ROWS);
+const POSITION_PAD_FRAME_BUFFER_LEN: usize =
+    POSITION_PAD_AREA_WIDTH as usize * POSITION_PAD_ROW_MAX_HEIGHT;
+
+#[derive(Clone, Copy)]
+struct PositionPadState {
+    dot_0: Point,
+    dot_1: Point,
+    selector_x_0: i8,
+    selector_y_0: i8,
+    selector_x_1: i8,
+    selector_y_1: i8,
+    pressed: bool,
+    charset: usize,
+}
+
+impl PositionPadState {
+    fn from_reading(reading: &Reading, charset: usize) -> Self {
+        let diameter = POSITION_PAD_DIAMETER as f32;
+        Self {
+            dot_0: Point::new(
+                (reading.x_0 * diameter) as i32,
+                ((1.0 - reading.y_0) * diameter) as i32,
+            ),
+            dot_1: Point::new(
+                (reading.x_1 * diameter) as i32,
+                ((1.0 - reading.y_1) * diameter) as i32,
+            ),
+            selector_x_0: reading.sel_x_0,
+            selector_y_0: reading.sel_y_0,
+            selector_x_1: reading.sel_x_1,
+            selector_y_1: reading.sel_y_1,
+            pressed: reading.pressed,
+            charset,
+        }
+    }
+}
+
+fn position_pad_row_changed(
+    previous: Option<PositionPadState>,
+    current: PositionPadState,
+    row: Rectangle,
+) -> bool {
+    let Some(previous) = previous else {
+        return true;
+    };
+    if previous.charset != current.charset {
+        return true;
+    }
+
+    let row_y0 = row.top_left.y;
+    let row_y1 = row_y0 + row.size.height as i32;
+    let intersects = |top: i32, bottom: i32| bottom > row_y0 && top < row_y1;
+    let dot_changed_in_row = |old: Point, new: Point| {
+        old != new && (intersects(old.y - 1, old.y + 6) || intersects(new.y - 1, new.y + 6))
+    };
+    if dot_changed_in_row(previous.dot_0, current.dot_0)
+        || dot_changed_in_row(previous.dot_1, current.dot_1)
+    {
+        return true;
+    }
+
+    let diameter = POSITION_PAD_DIAMETER as i32;
+    let selector_intersects = |selector_y: i8, border: i32| {
+        let top = diameter / 3 * selector_y as i32;
+        intersects(top - border, top + diameter / 3 + border)
+    };
+    let selector_0_changed = previous.selector_x_0 != current.selector_x_0
+        || previous.selector_y_0 != current.selector_y_0
+        || previous.pressed != current.pressed;
+    if selector_0_changed
+        && (selector_intersects(previous.selector_y_0, if previous.pressed { 3 } else { 1 })
+            || selector_intersects(current.selector_y_0, if current.pressed { 3 } else { 1 }))
+    {
+        return true;
+    }
+
+    let selector_1_changed = previous.selector_x_1 != current.selector_x_1
+        || previous.selector_y_1 != current.selector_y_1;
+    selector_1_changed
+        && (selector_intersects(previous.selector_y_1, 1)
+            || selector_intersects(current.selector_y_1, 1))
+}
 
 fn rainbow_at(length: usize, step: usize) -> Rgb565 {
     let step = step % length;
@@ -135,19 +224,23 @@ pub async fn debug_input<T: DisplayTarget>(
             .await
             .unwrap();
     }
+    frame_buffer.clear(Rgb565::RED).unwrap();
     let mut time = None;
     let mut min_v = u16::MAX;
     let mut max_v = u16::MIN;
-    let mut x_0 = 0.0;
-    let mut y_0 = 0.0;
     let mut current_coordinates = Reading::default();
-    let mut current_select = 4;
-    let mut current_pressed = false;
+    let mut previous_position_pad_state = None;
+    let mut values_since_graph_redraw = 0usize;
+    let mut last_graph_redraw = Instant::now();
+    let mut displayed_time_range = None;
     loop {
         let start = Instant::now();
+        let mut drew_anything = false;
         let mut loaded = 0;
+        let mut coordinate_values_loaded = 0;
         while let Ok(coordinates) = channel.try_receive() {
             loaded += 1;
+            coordinate_values_loaded += 1;
             let x0 = coordinates.x_0;
             let y0 = coordinates.y_0;
             let x1 = coordinates.x_1;
@@ -191,66 +284,94 @@ pub async fn debug_input<T: DisplayTarget>(
                 buffer_touch.pop_front();
             }
         }
-        if loaded == 0 {
+        values_since_graph_redraw =
+            values_since_graph_redraw.saturating_add(coordinate_values_loaded);
+        let graph_redraw_due = values_since_graph_redraw >= GRAPH_REDRAW_VALUE_INTERVAL
+            || last_graph_redraw.elapsed().as_millis() >= GRAPH_REDRAW_INTERVAL_MS;
+        if loaded == 0 && !graph_redraw_due {
             Timer::after(Duration::from_millis(100)).await;
             continue;
         }
-        draw_buffer(&mut frame_buffer, &buffer_x1, INPUT_COLORS[2]);
-        draw_buffer(&mut frame_buffer, &buffer_y1, INPUT_COLORS[3]);
-        draw_touch_buffer(&mut frame_buffer, &mut buffer_touch, 0, Rgb565::WHITE);
-        display
-            .draw(
-                Point::new(0, 0),
-                frame_buffer.size(),
-                frame_buffer.data.iter().copied(),
-            )
-            .await
-            .unwrap();
-        frame_buffer.clear(Rgb565::RED).unwrap();
 
-        draw_buffer(&mut frame_buffer, &buffer_x0, INPUT_COLORS[0]);
-        draw_buffer(&mut frame_buffer, &buffer_y0, INPUT_COLORS[1]);
-        draw_touch_buffer(
-            &mut frame_buffer,
-            &mut buffer_touch,
-            BAND_HEIGHT,
-            Rgb565::WHITE,
-        );
-        display
-            .draw(
-                Point::new(0, BAND_HEIGHT + 1),
-                frame_buffer.size(),
-                frame_buffer.data.iter().copied(),
-            )
-            .await
-            .unwrap();
-        frame_buffer.clear(Rgb565::RED).unwrap();
+        let mut time_range_changed = false;
+        if let Some(elapsed_ms) = time.take() {
+            buffer_time.push_back(elapsed_ms).unwrap();
+            if buffer_time.len() > 320 {
+                buffer_time.pop_front();
+            }
+            time_range_changed = time_range(&buffer_time) != displayed_time_range;
+        }
+
+        if graph_redraw_due {
+            draw_buffer(&mut frame_buffer, &buffer_x1, INPUT_COLORS[2]);
+            draw_buffer(&mut frame_buffer, &buffer_y1, INPUT_COLORS[3]);
+            draw_touch_buffer(&mut frame_buffer, &mut buffer_touch, 0, Rgb565::WHITE);
+            display
+                .draw(
+                    Point::new(0, 0),
+                    frame_buffer.size(),
+                    frame_buffer.data.iter().copied(),
+                )
+                .await
+                .unwrap();
+            frame_buffer.clear(Rgb565::RED).unwrap();
+
+            draw_buffer(&mut frame_buffer, &buffer_x0, INPUT_COLORS[0]);
+            draw_buffer(&mut frame_buffer, &buffer_y0, INPUT_COLORS[1]);
+            draw_touch_buffer(
+                &mut frame_buffer,
+                &mut buffer_touch,
+                BAND_HEIGHT,
+                Rgb565::WHITE,
+            );
+            display
+                .draw(
+                    Point::new(0, BAND_HEIGHT + 1),
+                    frame_buffer.size(),
+                    frame_buffer.data.iter().copied(),
+                )
+                .await
+                .unwrap();
+            drew_anything = true;
+            frame_buffer.clear(Rgb565::RED).unwrap();
+        }
 
         let select = current_coordinates.sel_x_1 + current_coordinates.sel_y_1 * 3;
         let charset = CHARSETS[select as usize];
-        if f32::abs(x_0 - current_coordinates.x_0) > 0.01
-            || f32::abs(y_0 - current_coordinates.y_0) > 0.01
-            || current_select != select
-            || current_pressed != current_coordinates.pressed
+        let position_pad_state =
+            PositionPadState::from_reading(&current_coordinates, select as usize);
+        drop(frame_buffer);
         {
-            x_0 = current_coordinates.x_0;
-            y_0 = current_coordinates.y_0;
-            current_select = select;
-            current_pressed = current_coordinates.pressed;
-            for y in (0..POSITION_PAD_DIAMETER).step_by(BAND_HEIGHT as usize) {
-                let y_offset = y as i32;
-                let height = BAND_HEIGHT.min((POSITION_PAD_DIAMETER - y) as i32) as u32;
-                // The visible stripe in pad-local coordinates: draw_position only
-                // rasterizes primitives that intersect it, instead of rasterizing
-                // the full pad four times and discarding out-of-stripe pixels.
+            let position_frame_buffer_data = frame_buffer_data
+                .first_chunk_mut::<POSITION_PAD_FRAME_BUFFER_LEN>()
+                .unwrap();
+            let mut position_frame_buffer = FrameBuf::new(
+                position_frame_buffer_data,
+                POSITION_PAD_AREA_WIDTH as usize,
+                POSITION_PAD_ROW_MAX_HEIGHT,
+            );
+            for row in 0..POSITION_PAD_ROWS {
+                let y_offset = POSITION_PAD_DIAMETER * row / POSITION_PAD_ROWS;
+                let y_end = POSITION_PAD_DIAMETER * (row + 1) / POSITION_PAD_ROWS;
+                let height = (y_end - y_offset) as u32;
                 let band = Rectangle::new(
-                    Point::new(0, y_offset),
+                    Point::new(0, y_offset as i32),
                     Size::new(POSITION_PAD_DIAMETER as u32, height),
                 );
-                let mut cropped =
-                    frame_buffer.cropped(&Rectangle::new(Point::new(0, 0), Size::new(320, height)));
-                let mut trans0 =
-                    cropped.translated(Point::new((POSITION_PAD_DIAMETER + 10) as i32, -y_offset));
+                if !position_pad_row_changed(previous_position_pad_state, position_pad_state, band)
+                {
+                    continue;
+                }
+
+                position_frame_buffer.clear(Rgb565::RED).unwrap();
+                let mut cropped = position_frame_buffer.cropped(&Rectangle::new(
+                    Point::new(0, 0),
+                    Size::new(POSITION_PAD_AREA_WIDTH, height),
+                ));
+                let mut trans0 = cropped.translated(Point::new(
+                    (POSITION_PAD_DIAMETER + 10) as i32,
+                    -(y_offset as i32),
+                ));
                 draw_position(
                     &mut trans0,
                     band,
@@ -261,7 +382,7 @@ pub async fn debug_input<T: DisplayTarget>(
                     current_coordinates.pressed,
                     charset,
                 );
-                let mut trans1 = cropped.translated(Point::new(0, -y_offset));
+                let mut trans1 = cropped.translated(Point::new(0, -(y_offset as i32)));
                 draw_position(
                     &mut trans1,
                     band,
@@ -273,40 +394,73 @@ pub async fn debug_input<T: DisplayTarget>(
                     "",
                 );
 
-                // Only the pads' columns change; sending 242-wide rows instead of
-                // the buffer's full 320 saves ~25% of the transfer. The iterator
-                // must clip each backing row so rows stay aligned with the
-                // narrower window.
                 display
                     .draw(
-                        Point::new(0, (BAND_HEIGHT + 1) * 4 + y_offset),
+                        Point::new(0, (BAND_HEIGHT + 1) * 4 + y_offset as i32),
                         Size::new(POSITION_PAD_AREA_WIDTH, height),
-                        frame_buffer.data.chunks(320).flat_map(|row| {
-                            row[..POSITION_PAD_AREA_WIDTH as usize].iter().copied()
-                        }),
+                        position_frame_buffer
+                            .data
+                            .iter()
+                            .take(POSITION_PAD_AREA_WIDTH as usize * height as usize)
+                            .copied(),
                     )
                     .await
                     .unwrap();
-                frame_buffer.clear(Rgb565::RED).unwrap();
+                drew_anything = true;
             }
         }
-
-        fill_and_draw_time(&mut frame_buffer, time, &mut buffer_time);
-        draw_touch_buffer(
-            &mut frame_buffer,
-            &mut buffer_touch,
-            BAND_HEIGHT * 2,
-            Rgb565::WHITE,
-        );
-        display
-            .draw(
-                Point::new(0, (BAND_HEIGHT + 1) * 2),
-                frame_buffer.size(),
-                frame_buffer.data.iter().copied(),
-            )
-            .await
-            .unwrap();
+        previous_position_pad_state = Some(position_pad_state);
+        frame_buffer = FrameBuf::new(&mut frame_buffer_data, 320, BAND_HEIGHT as usize);
         frame_buffer.clear(Rgb565::RED).unwrap();
+
+        if graph_redraw_due {
+            draw_time(&mut frame_buffer, &buffer_time);
+            draw_touch_buffer(
+                &mut frame_buffer,
+                &mut buffer_touch,
+                BAND_HEIGHT * 2,
+                Rgb565::WHITE,
+            );
+            display
+                .draw(
+                    Point::new(0, (BAND_HEIGHT + 1) * 2),
+                    frame_buffer.size(),
+                    frame_buffer.data.iter().copied(),
+                )
+                .await
+                .unwrap();
+            drew_anything = true;
+            frame_buffer.clear(Rgb565::RED).unwrap();
+            values_since_graph_redraw = 0;
+            last_graph_redraw = Instant::now();
+            displayed_time_range = time_range(&buffer_time);
+        } else if time_range_changed {
+            let Some((min, max)) = time_range(&buffer_time) else {
+                unreachable!();
+            };
+            let strip_width = displayed_time_range
+                .map(|(old_min, old_max)| time_axis_width(old_min, old_max))
+                .unwrap_or(0)
+                .max(time_axis_width(min, max));
+            let mut strip = frame_buffer.cropped(&Rectangle::new(
+                Point::new(0, 0),
+                Size::new(strip_width, BAND_HEIGHT as u32),
+            ));
+            draw_axis_min_max(&mut strip, min, max);
+            display
+                .draw(
+                    Point::new(0, (BAND_HEIGHT + 1) * 2),
+                    Size::new(strip_width, BAND_HEIGHT as u32),
+                    frame_buffer.data.chunks(320).flat_map(|row| {
+                        row[..strip_width as usize].iter().copied()
+                    }),
+                )
+                .await
+                .unwrap();
+            drew_anything = true;
+            frame_buffer.clear(Rgb565::RED).unwrap();
+            displayed_time_range = Some((min, max));
+        }
 
         let mut draw_band_3 = false;
 
@@ -346,10 +500,11 @@ pub async fn debug_input<T: DisplayTarget>(
                 )
                 .await
                 .unwrap();
+            drew_anything = true;
             frame_buffer.clear(Rgb565::RED).unwrap();
         }
 
-        time = Some(start.elapsed().as_millis());
+        time = drew_anything.then(|| start.elapsed().as_millis());
         Timer::after(Duration::from_millis(10)).await;
     }
 }
@@ -769,6 +924,31 @@ fn draw_axis_min_max<T: DrawTarget<Color = Rgb565>, M: core::fmt::Display>(
     .unwrap();
 }
 
+fn time_range(buffer: &Deque<u64, 321>) -> Option<(u64, u64)> {
+    let mut values = buffer.iter();
+    let first = *values.next()?;
+    let mut min = first;
+    let mut max = first;
+    for value in values {
+        min = min.min(*value);
+        max = max.max(*value);
+    }
+    Some((min, max))
+}
+
+fn time_axis_width(min: u64, max: u64) -> u32 {
+    fn decimal_digits(mut value: u64) -> u32 {
+        let mut digits = 1;
+        while value >= 10 {
+            value /= 10;
+            digits += 1;
+        }
+        digits
+    }
+
+    1 + TIME_AXIS_GLYPH_WIDTH * decimal_digits(min).max(decimal_digits(max))
+}
+
 fn draw_min_max<M: core::fmt::Display, T: DrawTarget<Color = Rgb565>>(
     target: &mut T,
     prefix: char,
@@ -869,31 +1049,20 @@ fn draw_buffer<T: DrawTarget<Color = Rgb565>>(
     }
 }
 
-/// Draw the time graph scaling it to currently visible min and max, this one is about 5 ms slower.
+/// Draw the time graph scaling it to currently visible min and max.
 ///
 /// ```no_run
 /// let mut buffer_time: Deque<u64, 321> = Deque::new();
 ///
-/// draw_time(&mut self.display, start, &mut buffer_time);
+/// draw_time(&mut self.display, &buffer_time);
 /// ```
 #[allow(dead_code)]
-fn fill_and_draw_time<T: DrawTarget<Color = Rgb565>>(
-    display: &mut T,
-    elapsed: Option<u64>,
-    buffer_time: &mut Deque<u64, 321>,
-) where
+fn draw_time<T: DrawTarget<Color = Rgb565>>(display: &mut T, buffer_time: &Deque<u64, 321>)
+where
     <T as DrawTarget>::Error: Debug,
 {
-    let Some(elapsed_ms) = elapsed else {
-        return;
-    };
     if let Some((min, max)) = draw_buffer_scaled(display, &buffer_time, Rgb565::WHITE) {
         draw_axis_min_max(display, min, max);
-    }
-
-    buffer_time.push_back(elapsed_ms).unwrap();
-    if buffer_time.len() > 320 {
-        buffer_time.pop_front();
     }
 }
 
