@@ -5,7 +5,7 @@ pub mod ili9341_async;
 
 use crate::input::{
     CH_BACKSPACE, CH_DELETE, CH_DOWN_ARROW, CH_ENTER, CH_ESCAPE, CH_LEFT_ARROW, CH_RIGHT_ARROW,
-    CH_TAB, CH_UP_ARROW, CHARSETS, value_to_percent,
+    CH_TAB, CH_UP_ARROW, CH_SPACE, CHARSETS, CHARSETS_SHIFTED, value_to_percent,
 };
 use crate::inter_task::{
     CoordinatesReceiver, IpDisplayReceiver, MESSAGE_SIZE, MessageReceiver, Reading, TouchReceiver,
@@ -72,6 +72,7 @@ struct PositionPadState {
     selector_x_1: i8,
     selector_y_1: i8,
     pressed: bool,
+    shift: bool,
     charset: usize,
 }
 
@@ -92,6 +93,7 @@ impl PositionPadState {
             selector_x_1: reading.sel_x_1,
             selector_y_1: reading.sel_y_1,
             pressed: reading.pressed,
+            shift: reading.shift,
             charset,
         }
     }
@@ -106,6 +108,9 @@ fn position_pad_row_changed(
         return true;
     };
     if previous.charset != current.charset {
+        return true;
+    }
+    if previous.shift != current.shift {
         return true;
     }
 
@@ -337,7 +342,7 @@ pub async fn debug_input<T: DisplayTarget>(
         }
 
         let select = current_coordinates.sel_x_1 + current_coordinates.sel_y_1 * 3;
-        let charset = CHARSETS[select as usize];
+        let charset = if current_coordinates.shift { CHARSETS_SHIFTED[select as usize] } else { CHARSETS[select as usize] };
         let position_pad_state =
             PositionPadState::from_reading(&current_coordinates, select as usize);
         drop(frame_buffer);
@@ -733,6 +738,9 @@ fn draw_special_glyph<T: DrawTarget<Color = Rgb565>>(
         let _ = Line::new(a, b).into_styled(style).draw(display);
     };
     match ch {
+        CH_SPACE => {
+            // empty, it's space, after all
+        },
         CH_BACKSPACE => {
             // ← left arrow with a stop
             line(Point::new(left, center_y), Point::new(right, center_y));

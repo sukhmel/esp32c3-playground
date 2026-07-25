@@ -1,0 +1,10 @@
+[package]
+name = "charset_proc"
+description = "Proc macro to make charsets, made with local LLM laguna-2.1-xs as an experiment"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+proc-macro = true
+
+[dependencies]

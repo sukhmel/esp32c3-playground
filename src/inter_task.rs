@@ -80,6 +80,7 @@ pub struct Reading {
     pub sel_x_1: i8,
     pub sel_y_1: i8,
     pub pressed: bool,
+    pub shift: bool,
 }
 
 impl Default for Reading {
@@ -101,6 +102,7 @@ impl Default for Reading {
             sel_x_1: 0,
             sel_y_1: 0,
             pressed: false,
+            shift: false,
         }
     }
 }

@@ -2,7 +2,7 @@ use crate::inter_task::{CHAR_CHANNEL, COORDINATES_CHANNEL, KEYPRESS_CHANNEL, Key
 use crate::pins::AnalogPeripherals;
 use ariel_os::debug::log::{debug, info, warn};
 use ariel_os::time::{Instant, Timer};
-use embassy_futures::select::{select, Either};
+use embassy_futures::select::{select3, Either3};
 use esp_hal::analog::adc::{Adc, AdcConfig, Attenuation};
 use esp_hal::gpio::{Event, Input};
 
@@ -12,30 +12,71 @@ static DEFAULT_MAX_V: u16 = 3860;
 // Characters that stand for special keys inside [`CHARSETS`]. Shared by the
 // display (draws a glyph, see `display::draw_special_glyph`) and the keyboard
 // (emits a keycode, see `keyboard::SPECIAL_KEYS`) so the two never disagree.
-pub const CH_TAB: char = '\t'; // 0x09
-pub const CH_ENTER: char = '\n'; // 0x0A
-pub const CH_BACKSPACE: char = '\u{8}'; // 0x08, i.e. \b
-pub const CH_ESCAPE: char = '\u{1b}'; // 0x1B, i.e. \e
-pub const CH_DELETE: char = '\u{7f}'; // Delete Forward
-pub const CH_LEFT_ARROW: char = '\u{2190}'; // ← Left Arrow
-pub const CH_RIGHT_ARROW: char = '\u{2192}'; // → Right Arrow
-pub const CH_UP_ARROW: char = '\u{2191}'; // ↑ Up Arrow
-pub const CH_DOWN_ARROW: char = '\u{2193}'; // ↓ Down Arrow
+pub const CH_SPACE: char = '␣';
+pub const CH_TAB: char = '↹';
+pub const CH_ENTER: char = '↵';
+pub const CH_BACKSPACE: char = '⌫';
+pub const CH_ESCAPE: char = '␛';
+pub const CH_DELETE: char = '⌦';
+pub const CH_LEFT_ARROW: char = '←';
+pub const CH_RIGHT_ARROW: char = '→';
+pub const CH_UP_ARROW: char = '↑';
+pub const CH_DOWN_ARROW: char = '↓';
 
 // 0 1 2
 // 3 4 5
 // 6 7 8
-pub static CHARSETS: [&str; 9] = [
-    ",M._\u{1b}/[`]",
-    "RTYF↑GHCV",
-    "UIOJ\nKLBN",
-    "{P}<←>:'\"",
-    "QWEA DZSX",
+pub static CHARSETS_BACKUP: [&str; 9] = [
+    ",m._␛/[`]",
+    "rtyf↑ghcv",
+    "uioj↵klbn",
+    "{p}<←>:'\"",
+    "qwea␣dzsx",
     "1234→5678",
-    "90!@ #$%^",
+    "90!@⌦#$%^",
     "(&)*↓-+=\\",
-    "[\u{8}]{\t}|;~",
+    "[⌫]{↹}|;~",
 ];
+
+pub static CHARSETS_SHIFTED_BACKUP: [&str; 9] = [
+    ",M._␛/[`]",
+    "RTYF↑GHCV",
+    "UIOJ↵KLBN",
+    "{P}<←>:'\"",
+    "QWEA␣DZSX",
+    "1234→5678",
+    "90!@⌦#$%^",
+    "(&)*↓-+=\\",
+    "[⌫]{↹}|;~",
+];
+
+pub static CHARSETS: [&str; 9] = charset_proc::make_charset_static!(
+"           , m  .    |   r  t  y   |   u  i  o                         ",
+"           _ ␛  /    |   f  ↑  g   |   j  ↵  k                         ",
+"           [ `  ]    |   h  c  v   |   l  b  n                         ",
+"",
+"           {  p  }   |   q  w  e   |   1  2  3                         ",
+"           <  ←  >   |   a  ␣  d   |   4  →  5                         ",
+"           :  '  \"  |   z  s  x   |   6  7  8                         ",
+"",
+"           9  0  !   |   (  &  )   |   [  ⌫  ]                         ",
+"           @  ⌦  #   |   *  ↓  -   |   {  ↹  }                         ",
+"           $  %  ^   |   +  =  \\  |  ⑊|  ;  ~                         ",
+);
+
+pub static CHARSETS_SHIFTED: [&str; 9] = charset_proc::make_charset_static!(
+"           , M  .    |   R  T  Y   |   U  I  O                         ",
+"           _ ␛  /    |   F  ↑  G   |   J  ↵  K                         ",
+"           [ `  ]    |   H  C  V   |   L  B  N                         ",
+"",
+"           {  P  }   |   Q  W  E   |   1  2  3                         ",
+"           <  ←  >   |   A  ␣  D   |   4  →  5                         ",
+"           :  '  \"  |   Z  S  X   |   6  7  8                         ",
+"",
+"           9  0  !   |   (  &  )   |   [  ⌫  ]                         ",
+"           @  ⌦  #   |   *  ↓  -   |   {  ↹  }                         ",
+"           $  %  ^   |   +  =  \\  |  ⑊|  ;  ~                         ",
+);
 
 macro_rules! value_to_percent {
     ($value: expr, $min: expr, $max: expr, $invert: expr) => {{
@@ -56,7 +97,7 @@ macro_rules! value_to_percent {
 
 pub(crate) use value_to_percent;
 
-pub async fn read_joystick(peripherals: AnalogPeripherals, mut button: Input<'_>) {
+pub async fn read_joystick(peripherals: AnalogPeripherals, mut button: Input<'_>, mut shift_button: Input<'_>) {
     info!("input: task started");
     let mut min_v = DEFAULT_MIN_V;
     let mut max_v = DEFAULT_MAX_V;
@@ -69,18 +110,24 @@ pub async fn read_joystick(peripherals: AnalogPeripherals, mut button: Input<'_>
     let mut keypress = None;
     let mut keypress_cycle = 0;
     let mut button_pressed = false;
+    let mut shift_pressed = false;
 
     loop {
-        match select(
+        match select3(
             button.wait_for(if button_pressed {
+                Event::HighLevel
+            } else {
+                Event::LowLevel
+            }),
+            shift_button.wait_for(if shift_pressed {
                 Event::HighLevel
             } else {
                 Event::LowLevel
             }),
             Timer::after_millis(100),
         ).await {
-            Either::Second(_) => {}
-            Either::First(()) => {
+            Either3::Third(_) => {}
+            Either3::First(()) => {
                 button_pressed = !button_pressed;
 
                 if button_pressed {
@@ -92,6 +139,11 @@ pub async fn read_joystick(peripherals: AnalogPeripherals, mut button: Input<'_>
                         let _ = KEYPRESS_CHANNEL.try_send(Keypress::Released(char));
                     }
                 }
+            }
+            Either3::Second(()) => {
+                shift_pressed = !shift_pressed;
+
+                continue;
             }
         }
 
@@ -213,6 +265,7 @@ pub async fn read_joystick(peripherals: AnalogPeripherals, mut button: Input<'_>
             max_v,
             us: elapsed,
             pressed: keypress.is_some(),
+            shift: shift_pressed,
         }) {
             warn!("Failed to send coordinates");
         }

@@ -7,6 +7,8 @@ edition = "2024"
 ariel-os = { path = "build/imports/ariel-os/src/ariel-os", features = ["time"], default-features = false }
 ariel-os-hal = { path = "build/imports/ariel-os/src/ariel-os-hal" }
 bt-hci = { version = "0.6", optional = true }
+charset_proc = { path = "./charset_proc" }
+critical-section = "1.2.0"
 embassy-embedded-hal = { version = "0.5", optional = true }
 embassy-futures = "0.1"
 embassy-sync = { version = "0.7.2" }
@@ -27,7 +29,6 @@ static_cell = "2"
 sky-ili9341 = { version = "0.1", features = ["async", "graphics"], optional = true }
 trouble-host = { version = "0.5.1", features = ["gatt", "derive", "peripheral", "security"], optional = true }
 xpt2046-async = { git = "https://github.com/sukhmel/xpt2046_async.git", version = "0.3.2" }
-critical-section = "1.2.0"
 
 [patch.crates-io]
 esp-hal-smartled = { path = "patches/esp-hal-smartled" }

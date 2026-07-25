@@ -474,15 +474,13 @@ pub struct KeyStroke {
 const MODIFIER_NONE: u8 = 0x00;
 const MODIFIER_SHIFT: u8 = 0x02; // Left Shift bit flag
 
-use crate::input::{
-    CH_BACKSPACE, CH_DELETE, CH_DOWN_ARROW, CH_ENTER, CH_ESCAPE, CH_LEFT_ARROW, CH_RIGHT_ARROW,
-    CH_TAB, CH_UP_ARROW,
-};
+use crate::input::{CH_BACKSPACE, CH_DELETE, CH_DOWN_ARROW, CH_ENTER, CH_ESCAPE, CH_LEFT_ARROW, CH_RIGHT_ARROW, CH_SPACE, CH_TAB, CH_UP_ARROW};
 
 /// The 9 most common special keys, mapped to their HID usage IDs. Checked before
 /// [`ASCII_TO_HID`]; the arrows are non-ASCII so they cannot live in that table.
 /// Format: (char, modifier, keycode).
-const SPECIAL_KEYS: [(char, u8, u8); 9] = [
+const SPECIAL_KEYS: [(char, u8, u8); 10] = [
+    (CH_SPACE, MODIFIER_NONE, 0x2C),       // Spacebar
     (CH_TAB, MODIFIER_NONE, 0x2B),         // Tab
     (CH_ENTER, MODIFIER_NONE, 0x28),       // Enter / Return
     (CH_BACKSPACE, MODIFIER_NONE, 0x2A),   // Backspace
@@ -522,8 +520,8 @@ const ASCII_TO_HID: [(u8, u8); 128] = {
         let upper_ascii = (b'A' + i) as usize;
         let hid_code = 0x04 + i;
 
-        table[upper_ascii] = (MODIFIER_NONE, hid_code);
-        table[lower_ascii] = (MODIFIER_SHIFT, hid_code); // Uppercase needs Shift, but it's swapped
+        table[upper_ascii] = (MODIFIER_SHIFT, hid_code);
+        table[lower_ascii] = (MODIFIER_NONE, hid_code);
         i += 1;
     }
 

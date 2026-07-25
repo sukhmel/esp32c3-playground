@@ -65,69 +65,6 @@ fn panic(info: &core::panic::PanicInfo) -> ! {
     loop {}
 }
 
-static BUTTON: Mutex<RefCell<Option<(Input, ButtonState)>>> = Mutex::new(RefCell::new(None));
-
-/// The button clicks could have been processed with
-/// [`embedded_hal_async::digital::Wait::wait_for_low`], but this is more of a learning exercise.
-///
-/// Although it looks like IRQ slows down the system quite a bit. I should compare it to waiting.
-/// It seems to be related to program memory layout as changing the handler code causes a change in
-/// speed even when the handler code is not executed as no interruption is generated.
-/// 
-/// WiFi disconnected, BLE connected with 45 ms time, IRQ, no movement: 286–311 ms
-/// WiFi disconnected, BLE connected with 45 ms time, IRQ, movement: 288–677 ms
-/// WiFi disconnected, BLE advertises, IRQ, no movement: 233–260 ms
-/// WiFi disconnected, BLE advertises, IRQ, movement: 233–447 ms
-/// WiFi disconnected, BLE connected with 45 ms time, no IRQ, no movement: 102–114 ms
-/// WiFi disconnected, BLE connected with 45 ms time, no IRQ, movement: 102–230 ms
-/// WiFi disconnected, BLE advertises, no IRQ, no movement: 78–102 ms
-/// WiFi disconnected, BLE advertises, no IRQ, movement: 81–201 ms
-///
-/// ```
-/// let mut io = Io::new(peripherals.system.io_mux);
-/// io.set_interrupt_handler(handler);
-/// // Set up the input and store it in the static variable.
-/// // This example uses a push button that is high when not
-/// // pressed and low when pressed.
-/// let config = InputConfig::default().with_pull(Pull::Up);
-/// let mut button = Input::new(peripherals.binary.pin19, InputConfig::default().with_pull(Pull::Up));
-/// critical_section::with(|cs| {
-/// button.listen(Event::LowLevel);
-/// BUTTON.borrow_ref_mut(cs).replace((button, ButtonState::Released));
-/// });
-/// ```
-#[handler]
-#[allow(dead_code)]
-fn handler() {
-    critical_section::with(|cs| {
-        let mut button = BUTTON.borrow_ref_mut(cs);
-        let Some((button, state)) = button.as_mut() else {
-            // Some other interrupt has occurred
-            // before the button was set up.
-            return;
-        };
-
-        if button.is_interrupt_set() {
-            match state {
-                ButtonState::Pressed => {
-                    info!("Button released");
-                    let _ = BUTTON_STATE_SIGNAL.signal(ButtonState::Released);
-                    button.unlisten();
-                    button.listen(Event::LowLevel);
-                    *state = ButtonState::Released;
-                }
-                ButtonState::Released => {
-                    info!("Button pressed");
-                    let _ = BUTTON_STATE_SIGNAL.signal(ButtonState::Pressed);
-                    button.unlisten();
-                    button.listen(Event::HighLevel);
-                    *state = ButtonState::Pressed;
-                }
-            }
-        }
-    });
-}
-
 #[ariel_os::task(autostart, peripherals)]
 async fn ui(peripherals: Peripherals) {
     info!("Starting UI");
@@ -174,7 +111,8 @@ async fn ui(peripherals: Peripherals) {
     // never touches the time driver.
     #[cfg(not(feature = "ble"))]
     let keyboard = core::future::pending::<()>();
-    let button = Input::new(peripherals.binary.pin19, InputConfig::default().with_pull(Pull::Up));
+    let select_button = Input::new(peripherals.binary.pin19, InputConfig::default().with_pull(Pull::Up));
+    let shift_button = Input::new(peripherals.binary.pin20, InputConfig::default().with_pull(Pull::Up));
     let _ = join4(
         keyboard,
         display.debug_input(
@@ -184,7 +122,7 @@ async fn ui(peripherals: Peripherals) {
         ),
         // buzz(peripherals.binary.pin19, ledc, SOUND_CHANNEL.receiver()),
         touch.run(),
-        input::read_joystick(peripherals.analog, button),
+        input::read_joystick(peripherals.analog, select_button, shift_button),
     )
     .await;
     info!("Finished UI");
