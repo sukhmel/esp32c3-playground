@@ -1,6 +1,6 @@
 use crate::buzzer::Melody;
 use crate::touch::TouchInputResponse;
-use embassy_sync::blocking_mutex::raw::{CriticalSectionRawMutex};
+use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::channel::{Channel, Receiver};
 use embassy_sync::signal::Signal;
 use embassy_sync::watch::{Receiver as WatchReceiver, Sender as WatchSender, Watch};
@@ -45,7 +45,8 @@ pub type BleStateReceiver = WatchReceiver<'static, CriticalSectionRawMutex, bool
 
 /// Current button state, set in the interrupt handler.
 pub type ButtonWatch = Watch<CriticalSectionRawMutex, ButtonState, WATCH_CONSUMERS>;
-pub type ButtonReceiver = WatchReceiver<'static, CriticalSectionRawMutex, ButtonState, WATCH_CONSUMERS>;
+pub type ButtonReceiver =
+    WatchReceiver<'static, CriticalSectionRawMutex, ButtonState, WATCH_CONSUMERS>;
 pub type ButtonSender = WatchSender<'static, CriticalSectionRawMutex, ButtonState, WATCH_CONSUMERS>;
 
 pub const MESSAGE_SIZE: usize = 128;

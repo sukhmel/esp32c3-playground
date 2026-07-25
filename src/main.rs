@@ -4,15 +4,16 @@ extern crate alloc;
 
 include!(concat!(env!("OUT_DIR"), "/secrets.rs"));
 
-use core::cell::RefCell;
 #[cfg(feature = "wifi")]
 use crate::buzzer::Melody;
 use crate::buzzer::{SoundLed, buzz};
 #[cfg(feature = "ble")]
 use crate::inter_task::KEYPRESS_CHANNEL;
+use crate::inter_task::{
+    BUTTON_STATE_SIGNAL, ButtonState, COORDINATES_CHANNEL, IP_DISPLAY, SOUND_CHANNEL, TOUCH_CHANNEL,
+};
 #[cfg(feature = "wifi")]
 use crate::inter_task::{CHAR_CHANNEL, MESSAGE_SIZE};
-use crate::inter_task::{ButtonState, BUTTON_STATE_SIGNAL, COORDINATES_CHANNEL, IP_DISPLAY, SOUND_CHANNEL, TOUCH_CHANNEL};
 #[cfg(feature = "ble")]
 use crate::keyboard::serve_keyboard;
 use crate::pins::Peripherals;
@@ -29,9 +30,11 @@ use ariel_os::time::{Duration, Timer, with_timeout};
 use ariel_os_hal::gpio::{Level, Output};
 #[cfg(not(feature = "async_ili9341"))]
 use core::cell::RefCell;
+#[cfg(not(feature = "async_ili9341"))]
+use core::cell::RefCell;
 use critical_section::Mutex;
 use display::Display;
-use embassy_futures::join::{join4};
+use embassy_futures::join::{join, join4};
 #[cfg(feature = "async_ili9341")]
 use embassy_sync::blocking_mutex::raw::NoopRawMutex;
 #[cfg(not(feature = "async_ili9341"))]
@@ -39,11 +42,11 @@ use embedded_hal_bus::spi::RefCellDevice;
 #[cfg(not(feature = "async_ili9341"))]
 use esp_hal::delay::Delay;
 use esp_hal::gpio::OutputPin;
+use esp_hal::gpio::{Event, Input, InputConfig, Io, Pull};
+use esp_hal::handler;
 use esp_hal::ledc::Ledc;
 use esp_hal::spi::master::{Config, Spi};
 use esp_hal::time::Rate;
-use esp_hal::gpio::{Event, Input, InputConfig, Io, Pull};
-use esp_hal::handler;
 
 mod buzzer;
 mod display;
@@ -96,6 +99,7 @@ async fn ui(peripherals: Peripherals) {
         peripherals.binary.pin4,
         peripherals.binary.pin8,
         320,
+        240,
     )
     .unwrap();
     #[cfg(feature = "async_ili9341")]
@@ -111,18 +115,25 @@ async fn ui(peripherals: Peripherals) {
     // never touches the time driver.
     #[cfg(not(feature = "ble"))]
     let keyboard = core::future::pending::<()>();
-    let select_button = Input::new(peripherals.binary.pin19, InputConfig::default().with_pull(Pull::Up));
-    let shift_button = Input::new(peripherals.binary.pin20, InputConfig::default().with_pull(Pull::Up));
-    let _ = join4(
-        keyboard,
-        display.debug_input(
-            COORDINATES_CHANNEL.receiver(),
-            IP_DISPLAY.receiver().unwrap(),
-            TOUCH_CHANNEL.receiver(),
-        ),
+    let select_button = Input::new(
+        peripherals.binary.pin19,
+        InputConfig::default().with_pull(Pull::Up),
+    );
+    let shift_button = Input::new(
+        peripherals.binary.pin20,
+        InputConfig::default().with_pull(Pull::Up),
+    );
+    let _ = join(
+        // keyboard,
+        // display.debug_input(
+        //     COORDINATES_CHANNEL.receiver(),
+        //     IP_DISPLAY.receiver().unwrap(),
+        //     TOUCH_CHANNEL.receiver(),
+        // ),
+        display.calibrate_touchscreen(TOUCH_CHANNEL.receiver()),
         // buzz(peripherals.binary.pin19, ledc, SOUND_CHANNEL.receiver()),
         touch.run(),
-        input::read_joystick(peripherals.analog, select_button, shift_button),
+        // input::read_joystick(peripherals.analog, select_button, shift_button),
     )
     .await;
     info!("Finished UI");

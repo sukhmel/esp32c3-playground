@@ -3942,8 +3942,9 @@ checksum = "1ebf944e87a7c253233ad6766e082e3cd714b5d03812acc24c318f549614536e"
 
 [[package]]
 name = "xpt2046-async"
-version = "0.3.2"
-source = "git+https://github.com/sukhmel/xpt2046_async.git#a356e8a9165d67de4273b7ade65f3d3765cb0c76"
+version = "0.3.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a22afae7c0c4c40fbe3a826892eddcdf8172d2d3821de8a6ed5196ef37e85e7c"
 dependencies = [
  "embedded-graphics-core",
  "embedded-hal 1.0.0",

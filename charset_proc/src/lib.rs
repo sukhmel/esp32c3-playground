@@ -6,11 +6,13 @@ const ESCAPE_CHAR: char = '\u{244A}'; // U+244A HEAVY DOUBLE OBJECT OVERLAPPED (
 /// Parses a single row of charset layout by splitting on unescaped '|' and processing each column segment.
 /// Goes char by char without trimming, skips whitespace only if NOT preceded by ESCAPE_CHAR.
 /// Escape character makes the next character literal - it goes directly into segment regardless of type.
-fn parse_row(row: &str) -> Vec<String> {
+fn parse_row(row: &str, print: bool) -> Vec<String> {
     let mut segments: Vec<String> = Vec::new();
     let mut current_segment = String::new();
 
-    eprintln!("[parse_row] Parsing row: {:?}", row);
+    if print {
+        eprintln!("[parse_row] Parsing row: {:?}", row);
+    }
 
     let chars: Vec<char> = row.chars().collect();
     let mut i = 0;
@@ -21,27 +23,37 @@ fn parse_row(row: &str) -> Vec<String> {
             if i + 1 < chars.len() {
                 let escaped_char = chars[i + 1];
                 current_segment.push(escaped_char);
-                eprintln!("[parse_row] Escape at pos {}, kept literal {:?} in segment", i, escaped_char);
+                if print {
+                    eprintln!("[parse_row] Escape at pos {}, kept literal {:?} in segment", i, escaped_char);
+                }
                 i += 2; // Skip both escape char and the escaped character
             } else {
                 // Escape char at end of string with no next char - skip it
-                eprintln!("[parse_row] Trailing escape char at end, skipping");
+                if print {
+                    eprintln!("[parse_row] Trailing escape char at end, skipping");
+                }
                 i += 1;
             }
         } else if chars[i] == ' ' {
             // Whitespace - skip it (not preceded by escape since we handle escapes above)
-            eprintln!("[parse_row] Space at pos {}, skipped", i);
+            if print {
+                eprintln!("[parse_row] Space at pos {}, skipped", i);
+            }
             i += 1;
         } else if chars[i] == '|' {
             // Unescaped pipe is a separator - push current segment and clear
             segments.push(current_segment.clone());
-            eprintln!("[parse_row] Pipe (separator) at pos {}, pushed segment {:?}", i, current_segment);
+            if print {
+                eprintln!("[parse_row] Pipe (separator) at pos {}, pushed segment {:?}", i, current_segment);
+            }
             current_segment.clear();
             i += 1;
         } else {
             // Regular character - always keep
             current_segment.push(chars[i]);
-            eprintln!("[parse_row] Regular char {:?} at pos {}", chars[i], i);
+            if print {
+                eprintln!("[parse_row] Regular char {:?} at pos {}", chars[i], i);
+            }
             i += 1;
         }
     }
@@ -49,7 +61,9 @@ fn parse_row(row: &str) -> Vec<String> {
     // Don't forget the last segment (even if empty due to trailing escape or other reasons)
     segments.push(current_segment.clone());
 
-    eprintln!("[parse_row] Final raw segments: {:?}", segments);
+    if print {
+        eprintln!("[parse_row] Final raw segments: {:?}", segments);
+    }
     segments
 }
 
@@ -65,7 +79,7 @@ fn make_charset_impl(rows: &[&str]) -> Vec<String> {
     
     if !has_separator {
         // No separators - merge all columns together
-        let parsed_rows: Vec<Vec<String>> = rows.iter().map(|r| parse_row(r)).collect();
+        let parsed_rows: Vec<Vec<String>> = rows.iter().map(|r| parse_row(r, false)).collect();
 
         let max_cols = parsed_rows.iter().map(|row| row.len()).max().unwrap_or(0);
 
@@ -94,7 +108,7 @@ fn make_charset_impl(rows: &[&str]) -> Vec<String> {
                 if i > group_start {
                     // Process this group of rows
                     let group_rows: Vec<&str> = rows[group_start..i].to_vec();
-                    let parsed_rows: Vec<Vec<String>> = group_rows.iter().map(|r| parse_row(r)).collect();
+                    let parsed_rows: Vec<Vec<String>> = group_rows.iter().map(|r| parse_row(r, false)).collect();
 
                     let max_cols = parsed_rows.iter().map(|row| row.len()).max().unwrap_or(0);
 

@@ -1,12 +1,17 @@
 //! Based on <https://github.com/lampaBiurkowa/esp32-ili9341-slint/blob/master/src/touch_input.rs>
 
+use crate::display;
 use crate::inter_task::TOUCH_CHANNEL;
 use ariel_os::debug::log::{info, warn};
+use ariel_os::debug::println;
 use ariel_os::time::{Duration, Timer};
 use embassy_embedded_hal::shared_bus::asynch::spi::SpiDeviceWithConfig;
+use embassy_futures::join::join;
 use embassy_sync::blocking_mutex::raw::NoopRawMutex;
 use embassy_sync::mutex::Mutex;
 use embedded_graphics::geometry::Point;
+use embedded_graphics::pixelcolor::Rgb565;
+use embedded_graphics::prelude::DrawTarget;
 use esp_hal::time::Rate;
 use esp_hal::{
     Async, Blocking,
@@ -38,6 +43,7 @@ pub(crate) struct Xpt2046TouchInput<'a> {
     driver: Xpt2046<SpiDeviceWithConfig<'a, NoopRawMutex, Spi<'a, Async>, Output<'a>>, Input<'a>>,
     last_pos: Option<(i32, i32)>,
     screen_width: i32,
+    screen_height: i32,
 }
 
 impl<'a> Xpt2046TouchInput<'a> {
@@ -46,23 +52,25 @@ impl<'a> Xpt2046TouchInput<'a> {
         touch_cs_pin: impl OutputPin + 'a,
         irq_pin: impl InputPin + 'a,
         screen_width: i32,
+        screen_height: i32,
     ) -> Result<Self, TouchInputError> {
         let touch_irq_pin = Input::new(irq_pin, Default::default());
         let touch_cs = Output::new(touch_cs_pin, Level::High, Default::default());
         let touch_spi_dev = SpiDeviceWithConfig::new(
             spi,
             touch_cs,
-            Config::default().with_frequency(Rate::from_mhz(5)),
+            Config::default().with_frequency(Rate::from_khz(500)),
         );
         let xpt = Xpt2046::new(
             touch_spi_dev,
             touch_irq_pin,
-            xpt2046_async::Orientation::LandscapeFlipped,
+            xpt2046_async::Orientation::Landscape,
         );
         Ok(Self {
             driver: xpt,
             last_pos: None,
             screen_width,
+            screen_height,
         })
     }
 
@@ -95,10 +103,9 @@ impl<'a> TouchInputProvider for Xpt2046TouchInput<'a> {
             .map_err(|_| TouchInputError::AcquireInputData)?;
 
         if self.driver.is_touched() {
-            // TODO: make adjustments, maybe configurable
             let p = self.driver.get_touch_point();
-            let x = self.screen_width - 2 * p.x;
-            let y = 2 * p.y;
+            let x = 2 * p.x - 18; // ad-hoc adjustment
+            let y = self.screen_height - 2 * p.y;
 
             match self.last_pos.replace((x, y)) {
                 Some(prev) if (prev.0 != x && prev.1 != y) => {

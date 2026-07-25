@@ -5,7 +5,7 @@ pub mod ili9341_async;
 
 use crate::input::{
     CH_BACKSPACE, CH_DELETE, CH_DOWN_ARROW, CH_ENTER, CH_ESCAPE, CH_LEFT_ARROW, CH_RIGHT_ARROW,
-    CH_TAB, CH_UP_ARROW, CH_SPACE, CHARSETS, CHARSETS_SHIFTED, value_to_percent,
+    CH_SPACE, CH_TAB, CH_UP_ARROW, CHARSETS, CHARSETS_SHIFTED, value_to_percent,
 };
 use crate::inter_task::{
     CoordinatesReceiver, IpDisplayReceiver, MESSAGE_SIZE, MessageReceiver, Reading, TouchReceiver,
@@ -198,6 +198,72 @@ where
     }
 }
 
+fn draw_aim<T: DrawTarget<Color = Rgb565>>(display: &mut T, x: i32, y: i32, color: Rgb565)
+where
+    <T as DrawTarget>::Error: Debug,
+{
+    Line::new(Point::new(x, y - 10), Point::new(x, y + 10))
+        .into_styled(PrimitiveStyle::with_stroke(color, 1))
+        .draw(display)
+        .unwrap();
+    Line::new(Point::new(x - 10, y), Point::new(x + 10, y))
+        .into_styled(PrimitiveStyle::with_stroke(color, 1))
+        .draw(display)
+        .unwrap();
+}
+
+pub async fn calibrate_touchscreen<T: DisplayTarget>(display: &mut T, touch: TouchReceiver) {
+    info!("display: debug task started");
+    let mut frame_buffer_data = [Rgb565::RED; (320 * BAND_HEIGHT) as usize];
+    let mut frame_buffer = FrameBuf::new(&mut frame_buffer_data, 320, BAND_HEIGHT as usize);
+    let mut buffer_touch: Deque<TouchInputResponse, 100> = Deque::new();
+    display.clear(Rgb565::RED).await.unwrap();
+    loop {
+        match select(Timer::after(Duration::from_millis(100)), touch.receive()).await {
+            Either::First(_) => {
+                continue;
+            }
+            Either::Second(touch) => {
+                match &touch {
+                    TouchInputResponse::Moved { x, y } => {
+                        info!("touch: moved {} {}", x, y);
+                    }
+                    TouchInputResponse::Pressed { x, y } => {
+                        info!("touch: pressed {} {}", x, y);
+                    }
+                    TouchInputResponse::Released { x, y } => {
+                        info!("touch: released {} {}", x, y);
+                    }
+                    _ => {}
+                }
+                buffer_touch.push_back(touch).unwrap();
+
+                if buffer_touch.len() > 99 {
+                    buffer_touch.pop_front();
+                }
+            }
+        }
+
+        let mut shift = 0;
+        while shift < 240 {
+            draw_touch_buffer(&mut frame_buffer, &mut buffer_touch, shift, Rgb565::WHITE);
+            // draw_aim(&mut frame_buffer, 20, 25 - shift, Rgb565::BLACK);
+            // draw_aim(&mut frame_buffer, 160, 220 - shift, Rgb565::BLUE);
+            // draw_aim(&mut frame_buffer, 300, 110 - shift, Rgb565::CSS_VIOLET);
+            display
+                .draw(
+                    Point::new(0, shift),
+                    frame_buffer.size(),
+                    frame_buffer.data.iter().copied(),
+                )
+                .await
+                .unwrap();
+            frame_buffer.clear(Rgb565::RED).unwrap();
+            shift += BAND_HEIGHT;
+        }
+    }
+}
+
 pub async fn debug_input<T: DisplayTarget>(
     display: &mut T,
     channel: CoordinatesReceiver,
@@ -342,7 +408,11 @@ pub async fn debug_input<T: DisplayTarget>(
         }
 
         let select = current_coordinates.sel_x_1 + current_coordinates.sel_y_1 * 3;
-        let charset = if current_coordinates.shift { CHARSETS_SHIFTED[select as usize] } else { CHARSETS[select as usize] };
+        let charset = if current_coordinates.shift {
+            CHARSETS_SHIFTED[select as usize]
+        } else {
+            CHARSETS[select as usize]
+        };
         let position_pad_state =
             PositionPadState::from_reading(&current_coordinates, select as usize);
         drop(frame_buffer);
@@ -456,9 +526,10 @@ pub async fn debug_input<T: DisplayTarget>(
                 .draw(
                     Point::new(0, (BAND_HEIGHT + 1) * 2),
                     Size::new(strip_width, BAND_HEIGHT as u32),
-                    frame_buffer.data.chunks(320).flat_map(|row| {
-                        row[..strip_width as usize].iter().copied()
-                    }),
+                    frame_buffer
+                        .data
+                        .chunks(320)
+                        .flat_map(|row| row[..strip_width as usize].iter().copied()),
                 )
                 .await
                 .unwrap();
@@ -740,7 +811,7 @@ fn draw_special_glyph<T: DrawTarget<Color = Rgb565>>(
     match ch {
         CH_SPACE => {
             // empty, it's space, after all
-        },
+        }
         CH_BACKSPACE => {
             // ← left arrow with a stop
             line(Point::new(left, center_y), Point::new(right, center_y));
@@ -753,7 +824,10 @@ fn draw_special_glyph<T: DrawTarget<Color = Rgb565>>(
             );
             line(
                 Point::new(left + stroke_adjustment * 2, center_y + stroke_adjustment),
-                Point::new(left + stroke_width as i32 * hx - stroke_adjustment, center_y + hy + stroke_adjustment),
+                Point::new(
+                    left + stroke_width as i32 * hx - stroke_adjustment,
+                    center_y + hy + stroke_adjustment,
+                ),
             );
             line(
                 Point::new(left, center_y - hy - stroke_adjustment),
@@ -792,21 +866,36 @@ fn draw_special_glyph<T: DrawTarget<Color = Rgb565>>(
             );
             line(Point::new(left, center_y + 2), Point::new(left, bottom));
             line(Point::new(left, bottom), Point::new(box_right, bottom));
-            line(Point::new(box_right, center_y + 2), Point::new(box_right, bottom));
+            line(
+                Point::new(box_right, center_y + 2),
+                Point::new(box_right, bottom),
+            );
         }
         // fine-tuned
         CH_ENTER => {
             // ↵ return: down the right edge, left along the middle, arrowhead left
             let shift = hy - 1 + stroke_adjustment;
-            line(Point::new(right, top + shift), Point::new(right, center_y + shift));
-            line(Point::new(left, center_y + shift), Point::new(right, center_y + shift));
             line(
-                Point::new(left, center_y + shift),
-                Point::new(left + hx + stroke_adjustment, center_y - hy + shift - stroke_adjustment),
+                Point::new(right, top + shift),
+                Point::new(right, center_y + shift),
             );
             line(
                 Point::new(left, center_y + shift),
-                Point::new(left + hx + stroke_adjustment, center_y + hy + shift + stroke_adjustment),
+                Point::new(right, center_y + shift),
+            );
+            line(
+                Point::new(left, center_y + shift),
+                Point::new(
+                    left + hx + stroke_adjustment,
+                    center_y - hy + shift - stroke_adjustment,
+                ),
+            );
+            line(
+                Point::new(left, center_y + shift),
+                Point::new(
+                    left + hx + stroke_adjustment,
+                    center_y + hy + shift + stroke_adjustment,
+                ),
             );
         }
         // fine-tuned
@@ -847,7 +936,10 @@ fn draw_special_glyph<T: DrawTarget<Color = Rgb565>>(
             );
             line(
                 Point::new(center_x + stroke_adjustment, bottom - stroke_adjustment),
-                Point::new(center_x + hx + stroke_adjustment, bottom - hy - stroke_adjustment),
+                Point::new(
+                    center_x + hx + stroke_adjustment,
+                    bottom - hy - stroke_adjustment,
+                ),
             );
         }
         // fine-tuned
@@ -862,7 +954,10 @@ fn draw_special_glyph<T: DrawTarget<Color = Rgb565>>(
                 Point::new(center_x - stroke_adjustment, top + stroke_adjustment),
             );
             line(
-                Point::new(center_x + hx + stroke_adjustment, top + hy + stroke_adjustment),
+                Point::new(
+                    center_x + hx + stroke_adjustment,
+                    top + hy + stroke_adjustment,
+                ),
                 Point::new(center_x + stroke_adjustment, top + stroke_adjustment),
             );
         }
@@ -871,7 +966,10 @@ fn draw_special_glyph<T: DrawTarget<Color = Rgb565>>(
             // ←
             line(Point::new(left, center_y), Point::new(right, center_y));
             line(
-                Point::new(left + hx + stroke_adjustment, center_y - hy - stroke_adjustment * 2),
+                Point::new(
+                    left + hx + stroke_adjustment,
+                    center_y - hy - stroke_adjustment * 2,
+                ),
                 Point::new(left, center_y - stroke_adjustment),
             );
             line(
@@ -885,7 +983,10 @@ fn draw_special_glyph<T: DrawTarget<Color = Rgb565>>(
             line(Point::new(left, center_y), Point::new(right, center_y));
             line(
                 Point::new(right, center_y - stroke_adjustment),
-                Point::new(right - hx - stroke_adjustment, center_y - hy - stroke_adjustment * 2),
+                Point::new(
+                    right - hx - stroke_adjustment,
+                    center_y - hy - stroke_adjustment * 2,
+                ),
             );
             line(
                 Point::new(right, center_y - stroke_adjustment),

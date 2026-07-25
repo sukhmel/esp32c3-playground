@@ -1,14 +1,16 @@
 extern crate alloc;
 
-use crate::display::{DisplayTarget, debug_input};
+use crate::display::{DisplayTarget, calibrate_touchscreen, debug_input};
 use crate::inter_task::{CoordinatesReceiver, IpDisplayReceiver, TouchReceiver};
 use ariel_os_hal::gpio::Output;
+use core::iter;
 use embassy_embedded_hal::shared_bus::asynch::spi::SpiDeviceWithConfig;
 use embassy_sync::blocking_mutex::raw::NoopRawMutex;
 use embassy_sync::mutex::Mutex;
 use embedded_graphics::geometry::Point;
 use embedded_graphics::pixelcolor::Rgb565;
 use embedded_graphics::prelude::*;
+use embedded_graphics::primitives::Rectangle;
 use esp_hal::Async;
 use esp_hal::delay::Delay;
 use esp_hal::spi::master::{Config, Spi};
@@ -54,6 +56,10 @@ impl<'a, 'd> Display<'a, 'd> {
     ) {
         debug_input(self, channel, address, touch).await
     }
+
+    pub async fn calibrate_touchscreen(&mut self, touch: TouchReceiver) {
+        calibrate_touchscreen(self, touch).await
+    }
 }
 
 impl DisplayTarget for Display<'_, '_> {
@@ -84,5 +90,59 @@ impl DisplayTarget for Display<'_, '_> {
             )
             .await
             .map_err(|_| ())
+    }
+}
+
+impl DrawTarget for Display<'_, '_> {
+    type Color = Rgb565;
+    type Error = ();
+
+    fn draw_iter<I>(&mut self, pixels: I) -> Result<(), Self::Error>
+    where
+        I: IntoIterator<Item = Pixel<Self::Color>>,
+    {
+        for pixel in pixels {
+            embassy_futures::block_on(self.display.write_pixels(
+                pixel.0.x as u16,
+                pixel.0.y as u16,
+                pixel.0.x as u16,
+                pixel.0.y as u16,
+                iter::once(pixel.1.into_storage()),
+            ))
+            .map_err(|_| ())?
+        }
+        Ok(())
+    }
+
+    fn fill_contiguous<I>(&mut self, area: &Rectangle, colors: I) -> Result<(), Self::Error>
+    where
+        I: IntoIterator<Item = Self::Color>,
+    {
+        embassy_futures::block_on(self.draw(area.top_left, area.size, colors))
+    }
+
+    fn fill_solid(&mut self, area: &Rectangle, color: Self::Color) -> Result<(), Self::Error> {
+        embassy_futures::block_on(self.display.fill_rect(
+            area.top_left.x as u16,
+            area.top_left.y as u16,
+            (area.top_left.x + area.size.width as i32) as u16,
+            (area.top_left.y + area.size.height as i32) as u16,
+            color.into_storage(),
+        ))
+        .map_err(|_| ())
+    }
+
+    fn clear(&mut self, color: Self::Color) -> Result<(), Self::Error> {
+        embassy_futures::block_on(<Self as DisplayTarget>::clear(self, color))
+    }
+}
+
+impl Dimensions for Display<'_, '_> {
+    fn bounding_box(&self) -> Rectangle {
+        let dimensions = self.display.options().display_dimensions();
+        Rectangle::new(
+            Point::new(0, 0),
+            Size::new(dimensions.0 as u32, dimensions.1 as u32),
+        )
     }
 }
